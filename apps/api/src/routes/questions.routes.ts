@@ -1,5 +1,13 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { questionInputSchema, questionSearchQuerySchema } from '@njala/shared';
+
+const questionUpdateSchema = z.object({
+  questionText: z.string().trim().min(3).max(5000).optional(),
+  marks: z.number().positive().max(100).optional(),
+  difficulty: z.number().int().min(1).max(5).optional(),
+  explanation: z.string().trim().max(3000).optional(),
+});
 import { authenticate } from '../middleware/authenticate.js';
 import { isStaffRole, requireRole } from '../middleware/authorize.js';
 import { recordAuditEvent } from '../services/audit.service.js';
@@ -88,7 +96,7 @@ export async function questionsRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch('/:id', { preHandler: [authenticate, AUTHOR_ROLES], schema: { tags: ['questions'] } }, async (request) => {
     const { id } = request.params as { id: string };
-    const input = questionInputSchema.partial().parse(request.body);
+    const input = questionUpdateSchema.parse(request.body);
     const patch: Record<string, unknown> = {};
     if (input.questionText) patch.question_text = input.questionText;
     if (input.marks) patch.marks = input.marks;

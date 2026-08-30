@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { AnyZodObject } from 'zod';
 import {
   facultyInputSchema,
   departmentInputSchema,
@@ -25,7 +26,7 @@ function registerCrud(
     path: string;
     table: string;
     tag: string;
-    schema: import('zod').ZodTypeAny;
+    schema: AnyZodObject;
     select?: string;
     orderBy?: string;
     softDelete?: boolean;

@@ -60,6 +60,26 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  app.get('/mine/uploaded', { preHandler: [authenticate, STAFF_UPLOAD_ROLES], schema: { tags: ['papers'], summary: 'Papers uploaded by the current user' } }, async (request) => {
+    const { data, error } = await request.db
+      .from('examination_papers')
+      .select('id, title, status, created_at, courses(code, title)')
+      .eq('uploaded_by', request.user!.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return { items: data };
+  });
+
+  app.get('/bookmarks/mine', { preHandler: authenticate, schema: { tags: ['papers'], summary: 'List the current user\'s bookmarked papers' } }, async (request) => {
+    const { data, error } = await request.db
+      .from('bookmarks')
+      .select('id, created_at, examination_papers(id, title, status, courses(code, title))')
+      .eq('user_id', request.user!.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return { items: data };
+  });
+
   app.get('/:id', { preHandler: authenticate, schema: { tags: ['papers'] } }, async (request) => {
     const { id } = request.params as { id: string };
     const { data, error } = await request.db
@@ -71,7 +91,8 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
     if (!data) throw new NotFoundError('Examination paper');
 
     await request.db.from('paper_views').insert({ paper_id: id, user_id: request.user!.id });
-    await request.db.rpc('increment_paper_view_count', { p_paper_id: id }).catch(() => undefined);
+    const { error: viewCountError } = await request.db.rpc('increment_paper_view_count', { p_paper_id: id });
+    if (viewCountError) request.log.warn({ err: viewCountError, paperId: id }, 'Failed to increment paper view count');
     return data;
   });
 
@@ -243,7 +264,8 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
 
     const url = await createSignedUrl(paper.storage_path);
     await request.db.from('paper_downloads').insert({ paper_id: id, user_id: request.user!.id });
-    await request.db.rpc('increment_paper_download_count', { p_paper_id: id }).catch(() => undefined);
+    const { error: downloadCountError } = await request.db.rpc('increment_paper_download_count', { p_paper_id: id });
+    if (downloadCountError) request.log.warn({ err: downloadCountError, paperId: id }, 'Failed to increment paper download count');
     await recordAuditEvent({ actorId: request.user!.id, action: 'paper.download', entityType: 'examination_papers', entityId: id, request });
     return { url, expiresInSeconds: 300 };
   });

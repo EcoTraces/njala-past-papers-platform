@@ -5,7 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import { randomUUID } from 'node:crypto';
 import { env } from './config/env.js';
-import { logger } from './lib/logger.js';
+import { fastifyLoggerOptions } from './lib/logger.js';
 import { AppError } from './lib/errors.js';
 import { registerSwagger } from './plugins/swagger.js';
 import { authRoutes } from './routes/auth.routes.js';
@@ -14,14 +14,16 @@ import { papersRoutes } from './routes/papers.routes.js';
 import { questionsRoutes } from './routes/questions.routes.js';
 import { practiceRoutes } from './routes/practice.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
+import { notificationsRoutes } from './routes/notifications.routes.js';
 import { adminRoutes } from './routes/admin.routes.js';
 import { internalRoutes } from './routes/internal.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
+import { publicRoutes } from './routes/public.routes.js';
 import { supabaseAnon } from './lib/supabase.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
-    logger,
+    logger: fastifyLoggerOptions,
     genReqId: () => randomUUID(),
     trustProxy: true,
   });
@@ -87,12 +89,14 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(healthRoutes, { prefix: '/api' });
+  await app.register(publicRoutes, { prefix: '/api/public' });
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(academicRoutes, { prefix: '/api' });
   await app.register(papersRoutes, { prefix: '/api/papers' });
   await app.register(questionsRoutes, { prefix: '/api/questions' });
   await app.register(practiceRoutes, { prefix: '/api/practice' });
   await app.register(dashboardRoutes, { prefix: '/api' });
+  await app.register(notificationsRoutes, { prefix: '/api/notifications' });
   await app.register(adminRoutes, { prefix: '/api/admin' });
   await app.register(internalRoutes, { prefix: '/api/internal' });
 
