@@ -347,6 +347,88 @@ source rather than trusting the earlier audit:
   recovery path - see `docs/architecture/document-processing.md`'s
   failure-mode table for the honest accounting of what remains.
 
+## Findings from Loop 08 (search and discovery: filters, relevance ranking, realistic-volume perf)
+
+- **`[BUG]` → fixed: `courseCode` was accepted but silently ignored.**
+  `paperSearchQuerySchema` declared it as a valid query parameter, but
+  `GET /api/papers`'s handler never referenced it at all - a caller
+  filtering by course code got the full unfiltered list back, no error,
+  nothing. Fixed: resolves to a `course_id` via a case-insensitive
+  `courses.code` lookup before filtering; a code that matches nothing
+  now returns zero results (a sentinel value that can never equal a
+  real uuid), not the unfiltered list.
+- **`[BUG]` → fixed: `sort=relevance` was a selectable option that did
+  nothing.** The `switch` statement handling `sort` had no `case
+  'relevance'` - it fell through to the `default` (`recent`), so a
+  keyword search never actually ranked by match quality, only by
+  upload recency. Fixed: added `search_examination_papers()`, a
+  SECURITY INVOKER Postgres function (`ts_rank` against
+  `websearch_to_tsquery`, RLS-transparent since it isn't SECURITY
+  DEFINER) - PostgREST's plain filter/order interface can't express a
+  computed-rank ORDER BY, so this is the one search path that
+  genuinely needs a real function; every other sort mode still uses
+  the existing embedded-select query.
+- **Real full-text search already worked structurally** (`search_vector`
+  weights title over OCR-extracted text, maintained by a trigger that
+  already fires on `extracted_text` updates - i.e. Loop 07's OCR
+  pipeline landing a paper's text automatically makes it searchable) -
+  confirmed, not re-implemented.
+- **`[MAJOR PERFORMANCE BUG]` → found and fixed via a realistic-volume
+  test.** Seeded 50,000 synthetic `examination_papers` rows and ran
+  `EXPLAIN ANALYZE` on the actual search/browse queries as an
+  authenticated STUDENT (not superuser - RLS matters for the plan). A
+  keyword search took **~940ms via a full sequential scan**, never
+  touching `idx_papers_search_vector` (the GIN index) - confirmed as
+  superuser (RLS bypassed) the exact same query used the index and ran
+  in ~7ms, isolating RLS as the cause. Root cause:
+  `examination_papers` has four permissive SELECT policies, which
+  Postgres combines with OR into one qual evaluated per candidate row;
+  with `auth.uid()`/`auth_has_role()`/`auth_is_admin()` called
+  unwrapped inside those policies, the combined qual was expensive and
+  opaque enough that the planner never considered the GIN index worth
+  using, for *any* role, not just the one whose policy branch contains
+  the correlated `course_lecturers` subquery. Fixed by wrapping each
+  call in `(select ...)` - Postgres/Supabase's own documented RLS
+  performance pattern, which forces a once-evaluated InitPlan instead
+  of a per-row function call. Measured result on the identical query:
+  **~940ms → ~29-110ms** (8-30x, depending on path), with *zero*
+  behavior change - all 30 `rls_rbac_assertions.sql` scenarios pass
+  identically before and after. Scoped to `examination_papers`'s
+  SELECT policies only (directly measured, directly in scope for
+  search); the same pattern likely benefits other RLS-protected tables
+  too, flagged in ROADMAP.md rather than applied speculatively
+  everywhere without a matching measurement.
+- **`[MISSING]` → added: indexes for the two unfiltered default
+  browse sorts.** Neither `created_at` (the `recent` sort/default) nor
+  `download_count` (`popular`) had a supporting index - an unfiltered
+  site-wide browse forced a full-table sort. Added
+  `idx_papers_created_at`/`idx_papers_download_count`; confirmed via
+  `EXPLAIN` at 50k rows that both now resolve via a plain `Index Scan`
+  in ~1ms instead of a sort over the whole table. Also added
+  `idx_papers_programme` (a declared filter with no supporting index
+  at all).
+- **`[MISSING]` → added: a real filter UI.** `PapersBrowse.tsx`
+  previously exposed only a keyword box and three sort buttons -
+  faculty/department/programme/course/academic-year/semester/
+  examination-type filtering, all supported by the API since the
+  original build, had no way to be triggered from the actual page.
+  Added course/examination-type/academic-year/semester dropdowns (data
+  from the existing academic-structure endpoints), a "Best match"
+  (relevance) sort chip that a keyword search now defaults to
+  automatically (still overridable), a result count, and a "Clear
+  filters" action. Faculty/department/programme filters are still
+  missing from the UI (the API supports them) - noted in ROADMAP.md
+  rather than added speculatively, since course is the filter students
+  actually search by in practice and this pass was already substantial.
+- **Verified: search cannot leak unpublished/unauthorized papers,
+  including through the new RPC.** Two new `rls_rbac_assertions.sql`
+  scenarios: a student explicitly requesting `p_status := 'DRAFT'`
+  through `search_examination_papers()` still gets zero rows (RLS,
+  not SECURITY DEFINER, governs the function regardless of what the
+  caller asks for), while the paper's own uploader still sees it via
+  the same call - proving the RPC doesn't accidentally widen access
+  relative to the plain query path.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -360,7 +442,7 @@ from a clean checkout.
 |---|---|---|
 | Public pages (landing, login, signup, about, help, contact, 404, 403) | `[COMPLETE]` | |
 | Account-pending page | `[COMPLETE]` | Added this pass |
-| Student: dashboard/browse/search/detail/PDF preview/download/bookmark/practice/results/attempts/notifications/profile | `[COMPLETE]` | PDF preview is an iframe against a signed URL (native browser rendering), not a custom PDF.js canvas viewer - see ROADMAP.md |
+| Student: dashboard/browse/search/detail/PDF preview/download/bookmark/practice/results/attempts/notifications/profile | `[COMPLETE]` | PDF preview is an iframe against a signed URL (native browser rendering), not a custom PDF.js canvas viewer - see ROADMAP.md. Browse/search gained real course/examination-type/academic-year/semester filters and a working relevance sort this pass (Loop 08) - previously only a keyword box and recent/popular/title sort buttons existed |
 | Lecturer: dashboard/my papers/upload/question bank | `[COMPLETE]` | |
 | Library: dashboard/review queue/upload | `[COMPLETE]` | |
 | Admin: dashboard/users/academic structure/audit logs | `[COMPLETE]` | |
@@ -386,6 +468,7 @@ from a clean checkout.
 | Notifications (list/mark-read/mark-all-read) | `[COMPLETE]` | Creation is system-only (no client insert), by design |
 | Admin (users/staff provisioning/status/roles/audit logs/system settings) | `[COMPLETE]` | |
 | Internal processing callback | `[COMPLETE]` | Shared-secret guarded, not a Fastify-auth route by design. Handles `QUEUED`→`PROCESSING`→`COMPLETED`/`FAILED` (Loop 07); automatically re-queues a bounded number of recoverable failures |
+| Paper search/discovery (`GET /api/papers`) | `[COMPLETE]` | Filter by course/course-code/faculty/department/programme/academic-year/semester/examination-type/status; keyword full-text search (title + OCR text); `sort=relevance`/`recent`/`popular`/`title`. Loop 08 fixed two real bugs (`courseCode` silently ignored; `relevance` sort did nothing) and a major RLS-vs-GIN-index performance issue found via a 50k-row realistic-volume test - see "Findings from Loop 08" |
 | Document processing pipeline (`apps/document-service`) | `[COMPLETE]` | Async, non-blocking dispatch; genuine `PROCESSING` state; extraction offloaded to a worker thread with a hard timeout; per-page OCR resilience; recoverable-vs-not failure classification driving automatic retry; manual `POST /:id/reprocess` for staff. See "Findings from Loop 07" |
 | OpenAPI/Swagger | `[COMPLETE]` | Served at `/api/docs`, generated from route schemas |
 | Rate limiting | `[COMPLETE]` | Global limiter plus a stricter per-route budget on `/api/auth/login`\|`/staff-login` (10/min), `/signup` and `/password-reset/request` (5/min); verified with a test that actually exceeds the budget and asserts a real `429` |
@@ -405,6 +488,8 @@ from a clean checkout.
 | Seed data | `[COMPLETE]` | Clearly dev/demo-only, never applied to production |
 | Migrations run clean from empty DB | `[COMPLETE]` | `scripts/db-test-setup.sh`, re-verified this session |
 | Privilege-escalation-specific RLS tests | `[COMPLETE]` | Student→ADMIN and ADMIN→SUPER_ADMIN self-grant both proven blocked (`42501`) |
+| RLS policy performance | `[PARTIAL]` | `examination_papers`'s SELECT policies fixed this pass (Loop 08) after a real ~8-30x regression was found via a 50k-row `EXPLAIN ANALYZE`; the same `(select ...)`-wrapping pattern is very likely worth applying to the rest of the schema's RLS policies too, not yet done - see ROADMAP.md |
+| Realistic-data-volume testing | `[COMPLETE]` | 50,000-row seed + `EXPLAIN ANALYZE` as an authenticated role (not superuser) for the default browse sorts and keyword search (Loop 08) - this is what surfaced the RLS/GIN-index issue above; not part of the automated CI suite (seeding 50k rows on every run would be wasteful), the script and results are recorded in "Findings from Loop 08" |
 
 ## Deployment & environment
 
@@ -422,11 +507,11 @@ from a clean checkout.
 | Suite | Status | Count |
 |---|---|---|
 | `packages/shared` unit | `[COMPLETE]` | 19 |
-| `apps/api` unit + integration | `[COMPLETE]` | 86 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06) + 8 document-processing service unit (Loop 07) + 7 internal-callback HTTP-integration (Loop 07) + 1 reprocess-endpoint RBAC (Loop 07)) |
+| `apps/api` unit + integration | `[COMPLETE]` | 91 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06) + 8 document-processing service unit (Loop 07) + 7 internal-callback HTTP-integration (Loop 07) + 1 reprocess-endpoint RBAC (Loop 07) + 5 search-filter/relevance-sort HTTP-integration (Loop 08)) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 8, public-routes-only (incl. 2 responsive-layout regression tests added in Loop 05); no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 16 (4 original + 6 real-scanned-PDF/OCR-resilience + 6 job-pipeline (PROCESSING callback, recoverable/non-recoverable classification, timeout, non-blocking-extraction) - all Loop 07) |
-| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 18 scenarios: the original 14 plus duplicate-content-detection-at-the-DB-constraint-level (using a real fixture checksum), `paper_versions` select/insert authorization, and a manually-guessed superseded-version storage path (Loop 06) |
+| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 20 scenarios (30 individual PASS assertions): the original 14 plus Loop 06's 4 (duplicate-detection, `paper_versions` authorization, guessed-storage-path) plus Loop 08's 2 (search-relevance-ranking-correctness, search-RPC-cannot-bypass-RLS) |
 
 ## Prioritized implementation checklist (highest priority first)
 
@@ -439,7 +524,8 @@ from a clean checkout.
 7. ~~Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; code-split the resulting bundle.~~ **done - found and fixed a real mobile header overflow bug along the way**
 8. ~~Loop 06: implement paper versioning, filename-extension validation, real-file testing, and an explicit paper-ID/storage-path IDOR adversarial pass.~~ **done - found and fixed two real bugs (a fake rollback comment with no actual rollback behind it; an RLS-rejected version replace masked as a 500 instead of 403) along the way**
 9. ~~Loop 07: audit/harden the Python document-processing pipeline - genuine `PROCESSING` state, non-blocking extraction with a hard timeout, retry handling for recoverable failures, real-scanned-PDF OCR testing.~~ **done - found and fixed three real bugs (`PROCESSING` was a dead enum value; extraction blocked the Python service's own event loop; a dispatch failure left a job silently stuck at `QUEUED` forever with no way to notice or recover) along the way**
-10. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment, a real message queue for document processing (a failed *callback* itself still has no automatic recovery - see docs/architecture/document-processing.md).
+10. ~~Loop 08: search/discovery - real filters, working relevance ranking, realistic-volume performance testing.~~ **done - found and fixed two real bugs (`courseCode` silently ignored; `sort=relevance` did nothing) and a major RLS-vs-GIN-index performance regression (~940ms → ~29-110ms) that a realistic 50k-row test surfaced and a small-fixture test never could have**
+11. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment, a real message queue for document processing (a failed *callback* itself still has no automatic recovery - see docs/architecture/document-processing.md), the `(select ...)` RLS-performance pattern applied beyond `examination_papers`'s SELECT policies, faculty/department/programme filters in the browse UI.
 
 ## Verification (this pass)
 
@@ -447,8 +533,8 @@ from a clean checkout.
 npm run build            # shared → api → web, all clean, test files excluded from all three dist/ outputs
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
-npm run test               # shared 19, api 86, web 2 - all passing (107 total)
-bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 18/18 RLS/RBAC scenarios passing, fresh DB
+npm run test               # shared 19, api 91, web 2 - all passing (112 total)
+bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 20/20 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 8/8 e2e passing
 cd apps/document-service && python -m pytest tests/ && ruff check .   # 16/16 tests passing, lint clean
 ```

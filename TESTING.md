@@ -115,6 +115,16 @@ these tests makes a network call. Covers:
   one deliberately slow test in this suite); `internal.callback.test.ts`
   drives the same scenarios through the real Fastify app via
   `app.inject()`, proving the PROCESSING/auto-retry wiring end to end.
+- `papers.search.test.ts` (Loop 08) - same in-memory-fake pattern,
+  covering `GET /api/papers`'s search-route wiring specifically:
+  `courseCode` actually resolves to a course id and filters by it
+  (case-insensitively), an unmatched code returns zero results rather
+  than the unfiltered list, and `sort=relevance` calls the
+  `search_examination_papers` RPC (with the resolved course id passed
+  through) while every other sort mode does not call it at all. The
+  RPC's own SQL correctness (ranking, RLS) is proven separately in
+  `rls_rbac_assertions.sql` against a real Postgres instance - this
+  file only proves the Node-side wiring is correct.
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are
@@ -270,9 +280,65 @@ others:
   student who already knows a version's exact historical
   `storage.objects` path (not just the current file's) cannot read
   that row directly.
+- **`search_examination_papers()` (the relevance-ranking RPC, Loop 08)
+  actually ranks correctly**: a title match outranks an extracted-
+  text-only match for the same term (weighted `ts_rank`), a
+  non-matching paper is excluded entirely rather than just ranked
+  last, and `total_count` reflects the true match count independent of
+  the pagination `limit`.
+- **The search RPC cannot be used to bypass RLS**: a student explicitly
+  passing `p_status := 'DRAFT'` still gets zero rows for a paper they
+  don't own, while the paper's own uploader gets it via the identical
+  call - proving the function's SECURITY INVOKER declaration (not
+  SECURITY DEFINER, unlike the counters/marking RPCs) actually matters
+  and isn't just a comment.
 
-18 scenarios in total. CI runs this against a real `postgres:16-alpine` service container on
+20 scenarios in total (30 individual PASS assertions - several
+scenarios cover more than one assertion each). CI runs this against a real `postgres:16-alpine` service container on
 every push/PR (`.github/workflows/ci.yml`, job `database`).
+
+## Realistic-data-volume performance testing (ad hoc, not in CI)
+
+Small-fixture correctness tests (the RLS/RBAC suite above uses ~10
+rows) can't catch a query planner regression - a sequential scan and a
+proper index scan return identical rows and identical PASS/FAIL
+results at that scale, and only diverge in timing once there's enough
+data for the difference to matter. Loop 08 found a real one this way:
+seed a realistic row count, then `EXPLAIN ANALYZE` the actual queries
+**as an authenticated role** (RLS changes the plan; testing as the
+`postgres` superuser bypasses it and would have hidden the exact issue
+found).
+
+Not part of the automated CI suite - seeding 50,000 rows on every push
+would be wasteful - so this is a manual, repeatable procedure:
+
+1. Seed synthetic `examination_papers` rows via `generate_series`,
+   cycling through the existing seed data's courses/academic-years/
+   semesters, with realistic variety: a status distribution weighted
+   toward `PUBLISHED`, randomized `created_at`/`download_count` (so
+   `ORDER BY` isn't trivially pre-sorted), and a minority of rows
+   whose `extracted_text` contains a common search term (so full-text
+   search has a realistic, non-trivial hit rate rather than matching
+   everything or nothing).
+2. `analyze examination_papers;` so the planner's statistics reflect
+   the new data.
+3. `set role authenticated; select set_config('request.jwt.claim.sub',
+   '<a seeded profile id>', false);` - simulates a real request's RLS
+   context, exactly like the assertion suite does.
+4. `explain (analyze, buffers)` the default recent/popular browse
+   queries and a keyword search through `search_examination_papers()`.
+5. Compare against the identical query run as the `postgres` superuser
+   (RLS bypassed) - a large gap between the two, where the superuser
+   version uses an index the authenticated version doesn't, is exactly
+   the signal that caught the Loop 08 regression.
+
+Results (50k rows, keyword search "algebra", ~6,250 matching rows):
+before the RLS-policy fix in "Findings from Loop 08" (TASK.md), ~940ms
+via a full sequential scan under RLS vs ~7ms via the GIN index as
+superuser; after the fix, ~29-110ms under RLS (still a sequential scan
+for the rank-ordered case, but cheap enough at this scale - see
+TASK.md for why the GIN index itself remains unused even after the
+fix, and DATABASE.md's "RLS policy performance" note for the pattern).
 
 ## CI
 

@@ -16,6 +16,53 @@ const REVIEW_ROLES = requireRole('LIBRARY_STAFF', 'ADMIN', 'SUPER_ADMIN');
 export async function papersRoutes(app: FastifyInstance): Promise<void> {
   app.get('/', { preHandler: authenticate, schema: { tags: ['papers'], summary: 'Search and list examination papers' } }, async (request) => {
     const query = paperSearchQuerySchema.parse(request.query);
+
+    let courseId = query.courseId;
+    if (query.courseCode && !courseId) {
+      const { data: course } = await request.db.from('courses').select('id').ilike('code', query.courseCode).maybeSingle();
+      // An unrecognized course code must return zero results, not the
+      // unfiltered list - '__no_match__' can never equal a real uuid
+      // column, so the subsequent .eq() below reliably yields nothing.
+      courseId = course?.id ?? '__no_match__';
+    }
+
+    // Relevance ranking (ts_rank against the search term) isn't
+    // something PostgREST's plain filter/order interface can express -
+    // it needs a real Postgres function. Every other sort mode uses
+    // the simple embedded-select path below; SECURITY INVOKER (see the
+    // migration) means RLS still governs visibility either way.
+    if (query.sort === 'relevance') {
+      const { data, error } = await request.db.rpc('search_examination_papers', {
+        p_query: query.q ?? null,
+        p_course_id: courseId ?? null,
+        p_faculty_id: query.facultyId ?? null,
+        p_department_id: query.departmentId ?? null,
+        p_programme_id: query.programmeId ?? null,
+        p_academic_year_id: query.academicYearId ?? null,
+        p_semester_id: query.semesterId ?? null,
+        p_examination_type: query.examinationType ?? null,
+        p_status: query.status ?? null,
+        p_limit: query.pageSize,
+        p_offset: (query.page - 1) * query.pageSize,
+      });
+      if (error) throw error;
+
+      const rows = (data ?? []) as Array<Record<string, unknown> & { course_code: string; course_title: string; total_count: number }>;
+      const total = rows[0]?.total_count ?? 0;
+      const items = rows.map(({ course_code, course_title, total_count: _totalCount, rank: _rank, ...rest }) => ({
+        ...rest,
+        courses: { code: course_code, title: course_title },
+      }));
+
+      return {
+        items,
+        total,
+        page: query.page,
+        pageSize: query.pageSize,
+        totalPages: Math.max(1, Math.ceil(total / query.pageSize)),
+      };
+    }
+
     let dbQuery = request.db
       .from('examination_papers')
       .select(
@@ -23,7 +70,7 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
         { count: 'exact' },
       );
 
-    if (query.courseId) dbQuery = dbQuery.eq('course_id', query.courseId);
+    if (courseId) dbQuery = dbQuery.eq('course_id', courseId);
     if (query.facultyId) dbQuery = dbQuery.eq('faculty_id', query.facultyId);
     if (query.departmentId) dbQuery = dbQuery.eq('department_id', query.departmentId);
     if (query.programmeId) dbQuery = dbQuery.eq('programme_id', query.programmeId);

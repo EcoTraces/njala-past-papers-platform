@@ -44,7 +44,7 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/` | ✓ | Search/filter/sort/paginate (`q, courseId, facultyId, departmentId, programmeId, academicYearId, semesterId, examinationType, status, sort, page, pageSize`) |
+| GET | `/` | ✓ | Search/filter/sort/paginate (`q, courseId, courseCode, facultyId, departmentId, programmeId, academicYearId, semesterId, examinationType, status, sort, page, pageSize`). `sort=relevance` ranks by `ts_rank` against `q` via the `search_examination_papers` RPC (SECURITY INVOKER - RLS still applies); every other sort uses the plain filtered/ordered query. `courseCode` resolves to a course id first (case-insensitive); an unmatched code returns zero results, never the unfiltered list |
 | GET | `/mine/uploaded` | ✓ (staff) | Papers the caller uploaded |
 | GET | `/bookmarks/mine` | ✓ | Caller's bookmarked papers |
 | GET | `/:id` | ✓ | Full paper detail; records a view |

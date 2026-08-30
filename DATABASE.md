@@ -20,6 +20,8 @@ prefix). Seed data for local development is in `supabase/seed/seed.sql`.
 | `..._storage.sql` | Creates the private `examination-papers` bucket and its `storage.objects` SELECT policy |
 | `..._practice_marking.sql` | `mark_practice_answer()` trigger (deterministic auto-marking) and `practice_submit_session()` RPC |
 | `..._counters.sql` | `increment_paper_view_count()` / `increment_paper_download_count()` SECURITY DEFINER RPCs |
+| `..._paper_search.sql` | `search_examination_papers()` - SECURITY INVOKER (not DEFINER) relevance-ranked full-text search RPC, `idx_papers_programme`/`idx_papers_created_at`/`idx_papers_download_count` |
+| `..._papers_rls_perf.sql` | Rewrites `examination_papers`'s `papers_select_own`/`papers_select_course_lecturer`/`papers_select_staff` policies to wrap `auth.uid()`/`auth_has_role()`/`auth_is_admin()` in `(select ...)` - a real, measured performance fix (see "Findings from Loop 08" in TASK.md), not a behavior change |
 
 ## Design choices
 
@@ -37,7 +39,15 @@ prefix). Seed data for local development is in `supabase/seed/seed.sql`.
   for the same exam.
 - **Full-text search**: `examination_papers.search_vector` (GIN index,
   weighted title > OCR text) maintained by a trigger; `courses` has its
-  own `tsvector` GIN index over code+title.
+  own `tsvector` GIN index over code+title. Relevance-ranked search
+  (`sort=relevance`) goes through `search_examination_papers()`, a
+  SECURITY INVOKER SQL function - PostgREST's plain filter/order
+  interface can't express `ts_rank`, but a plain query builder call
+  can't either, so this is the one search path that needs a real
+  Postgres function; every other sort mode still uses the ordinary
+  embedded-select query. SECURITY INVOKER (not DEFINER, unlike the
+  counters/marking RPCs) means RLS still governs which rows a caller
+  can see, verified directly in `rls_rbac_assertions.sql`.
 - **Practice snapshotting**: `practice_session_questions` freezes which
   questions (and their order) belong to an attempt, so later edits to
   the question bank never retroactively change a submitted attempt.
@@ -76,6 +86,25 @@ ARCHITECTURE.md; the short version:
 - `user_roles`: a user reads their own row; ADMIN/SUPER_ADMIN can grant
   any role *except* SUPER_ADMIN, which only a SUPER_ADMIN may grant -
   enforced in the `WITH CHECK` clause, not just in application code.
+
+**RLS policy performance**: wrap a policy's `auth.uid()`/
+`auth_has_role()`/`auth_is_admin()`/`auth_is_staff()` calls in
+`(select ...)`. Found via Loop 08's realistic-data-volume search test:
+`examination_papers` has four permissive SELECT policies that Postgres
+combines with OR into one qual evaluated per candidate row; with the
+functions called unwrapped, a 50k-row keyword search took ~940ms via a
+full sequential scan (the planner wouldn't use the GIN index on
+`search_vector` at all, regardless of role). Wrapping them as
+`(select ...)` - Postgres's own documented RLS performance pattern,
+which turns each call into a once-evaluated InitPlan instead of a
+per-row one - cut the same query to ~29-110ms with *identical*
+authorization behavior (all 30 `rls_rbac_assertions.sql` scenarios
+still pass unchanged). Applied so far only to `examination_papers`'s
+SELECT policies (`..._papers_rls_perf.sql`) - the same pattern likely
+benefits its INSERT/UPDATE/DELETE policies and other RLS-protected
+tables too; a broader pass is flagged in ROADMAP.md rather than done
+speculatively here without the matching realistic-volume measurement
+to justify each change.
 
 ## Storage
 

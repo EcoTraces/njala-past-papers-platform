@@ -63,7 +63,7 @@ Three independent layers, in order of how much you should trust them:
    itself validates. This is the layer that still protects the data if
    an API route's authorization check is ever missing or wrong.
    Directly exercised by `supabase/tests/rls_rbac_assertions.sql`
-   against a real Postgres instance (see TESTING.md) - 18 scenarios
+   against a real Postgres instance (see TESTING.md) - 20 scenarios
    including IDOR, IDOR-adjacent (another student's practice session),
    IDOR on the paper workflow (an unrelated lecturer, a lecturer trying
    to approve their own paper), IDOR on paper version history (a
@@ -74,7 +74,20 @@ Three independent layers, in order of how much you should trust them:
    (a lecturer reassigning a paper's `uploaded_by`), direct unauthorized
    storage access (bypassing the signed-URL flow to read
    `storage.objects` directly), duplicate-content detection at the
-   database constraint level, and anonymous access boundaries.
+   database constraint level, the relevance-search RPC not bypassing
+   RLS despite being callable with an explicit status filter, and
+   anonymous access boundaries.
+
+   **RLS policy performance** (Loop 08): a policy's `auth.uid()`/
+   `auth_has_role()`/`auth_is_admin()`/`auth_is_staff()` calls should be
+   wrapped in `(select ...)`. Found via a realistic-volume test that an
+   unwrapped call in `examination_papers`'s SELECT policies made the
+   planner abandon the GIN index on `search_vector` entirely, for every
+   role, not just the one whose policy branch has a correlated subplan
+   - an ~8-30x measured regression with *zero* difference in which rows
+   any given role could see (all 30 RLS/RBAC assertions pass unchanged
+   before and after). Fixed for `examination_papers`'s SELECT policies;
+   the same pattern likely applies schema-wide - see DATABASE.md.
 
 `apps/api` additionally uses a **per-request, token-scoped Supabase
 client** (`request.db`) for ordinary reads/writes instead of the

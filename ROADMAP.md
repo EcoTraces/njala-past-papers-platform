@@ -40,6 +40,13 @@ recorded in this repository's commit history - not just written.
   (both a dispatch-time retry-with-backoff and an automatic re-queue of
   a bounded number of recoverable processing failures) - see "Findings
   from Loop 07" in TASK.md.
+- Search/discovery: filter by course/course-code/faculty/department/
+  programme/academic-year/semester/examination-type, full-text keyword
+  search over title + OCR-extracted text, and a relevance-ranked sort
+  (`search_examination_papers()`, a SECURITY INVOKER RPC - RLS still
+  governs visibility) alongside recent/popular/title. Includes a real,
+  measured RLS-policy performance fix found via a 50,000-row test - see
+  "Findings from Loop 08" in TASK.md and DATABASE.md.
 
 **Frontend**
 - All page categories from the brief exist and call the real API:
@@ -93,6 +100,18 @@ recorded in this repository's commit history - not just written.
   API support (`GET`/`POST /api/papers/:id/versions`, Loop 06) - only
   the frontend screen for replacing a file is still missing.
   `paper_categories` has neither API nor UI yet.
+- The browse/search page (Loop 08) has course/examination-type/
+  academic-year/semester filters and a working relevance sort - the
+  API also supports faculty/department/programme filters, but the UI
+  doesn't expose them yet (course is what students actually search by
+  in practice, so it was prioritized).
+- The `(select ...)`-wrapped-function RLS performance pattern (Loop 08,
+  see DATABASE.md) is applied only to `examination_papers`'s SELECT
+  policies, where a realistic-volume test measured the regression it
+  fixes. The same pattern is very likely worth applying schema-wide
+  (and to that table's own INSERT/UPDATE/DELETE policies), but wasn't
+  done speculatively without a matching measurement justifying each
+  change - a good candidate for the security-hardening pass.
 - Analytics is limited to what `/api/analytics` and the dashboards
   expose (most-viewed/downloaded papers, basic counts). A dedicated
   `/app/analytics` page now renders this as real Recharts bar charts

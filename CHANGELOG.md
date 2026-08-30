@@ -307,3 +307,59 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   HTTP-integration, +1 reprocess-endpoint RBAC).
 - `apps/document-service`: 16/16 pytest passing, `ruff check` clean.
 - 18/18 RLS/RBAC scenarios and 8/8 Playwright e2e still passing.
+
+## [Unreleased] - Search and discovery: real filters, relevance ranking, realistic-volume perf (Loop 08)
+
+### Added
+
+- `search_examination_papers()`: a SECURITY INVOKER Postgres RPC for
+  `sort=relevance` - `ts_rank` against `websearch_to_tsquery` isn't
+  something PostgREST's plain filter/order interface can express.
+  Every other sort mode still uses the existing embedded-select query.
+  RLS still governs visibility (not SECURITY DEFINER) - verified with
+  2 new `rls_rbac_assertions.sql` scenarios.
+- `idx_papers_created_at`, `idx_papers_download_count`,
+  `idx_papers_programme`: the default `recent`/`popular` browse sorts
+  and the `programmeId` filter had no supporting index at all.
+- Real filter UI on `PapersBrowse.tsx`: course/examination-type/
+  academic-year/semester dropdowns, a "Best match" (relevance) sort
+  chip a keyword search now defaults to automatically, a result count,
+  and a "Clear filters" action - previously only a keyword box and
+  three sort buttons existed, even though the API already supported
+  every one of these filters.
+- 5 new HTTP-integration tests for the search route's filter/sort
+  wiring, and 2 new realistic-data-volume RLS/RBAC scenarios.
+
+### Fixed
+
+- `courseCode` was accepted by the search query schema but never
+  actually applied as a filter - silently ignored, returning the full
+  unfiltered list. Now resolves to a course id first (case-
+  insensitive); an unmatched code returns zero results, not everything.
+- `sort=relevance` was a selectable option that did nothing - the
+  `switch` statement had no case for it, silently falling back to
+  `recent`. Now genuinely ranks by match quality via the new RPC.
+- **Major performance regression, found via a realistic-volume test**:
+  seeded 50,000 synthetic papers and ran `EXPLAIN ANALYZE` as an
+  authenticated STUDENT (not superuser). A keyword search took ~940ms
+  via a full sequential scan, never touching the GIN index on
+  `search_vector` - confirmed as superuser the identical query used
+  the index and ran in ~7ms, isolating RLS as the cause. Root cause:
+  `examination_papers`'s four permissive SELECT policies call
+  `auth.uid()`/`auth_has_role()`/`auth_is_admin()` unwrapped, so
+  Postgres re-evaluates them per row instead of once, making the
+  combined OR'd qual too expensive/opaque for the planner to consider
+  the GIN index worth using, for any role. Fixed by wrapping each call
+  in `(select ...)` - Postgres/Supabase's own documented RLS
+  performance pattern. Measured: ~940ms → ~29-110ms (8-30x), with
+  *zero* authorization behavior change (all 30 RLS/RBAC assertions
+  pass identically before and after).
+
+### Verified
+
+- `npm run build`/`typecheck`/`lint`/`test` all clean; 112 tests
+  passing (up from 107: +5 search-filter/sort HTTP-integration).
+- 20/20 RLS/RBAC scenarios (30 individual assertions) and 8/8
+  Playwright e2e still passing.
+- Realistic-volume performance test (50k rows, not part of the
+  automated CI suite) recorded in TASK.md "Findings from Loop 08".

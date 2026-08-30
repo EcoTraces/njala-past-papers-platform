@@ -622,6 +622,114 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Scenario 19 (Loop 08): search_examination_papers() ranks a title
+-- match above an extracted-text-only match for the same term, and
+-- excludes non-matching papers entirely rather than just ranking them
+-- last - proving the relevance-ranking RPC actually works, not just
+-- that it runs without error.
+-- ---------------------------------------------------------------------
+insert into examination_papers (
+  id, title, course_id, faculty_id, department_id, academic_year_id, semester_id,
+  examination_type, status, uploaded_by, storage_path, original_filename,
+  file_size_bytes, mime_type, checksum_sha256, extracted_text
+) values
+  ('a1000000-0000-0000-0000-000000000005', 'Thermodynamics Past Paper', '44444444-4444-4444-4444-444444444401',
+   '11111111-1111-1111-1111-111111111101', '22222222-2222-2222-2222-222222222201',
+   '55555555-5555-5555-5555-555555555502', '66666666-6666-6666-6666-666666666601',
+   'END_OF_SEMESTER', 'PUBLISHED', '20000000-0000-0000-0000-000000000001',
+   'CSC101/test/rank-title-match.pdf', 'rank-title-match.pdf', 1000, 'application/pdf', repeat('h', 64), null),
+  ('a1000000-0000-0000-0000-000000000006', 'General Physics Exam', '44444444-4444-4444-4444-444444444401',
+   '11111111-1111-1111-1111-111111111101', '22222222-2222-2222-2222-222222222201',
+   '55555555-5555-5555-5555-555555555502', '66666666-6666-6666-6666-666666666601',
+   'END_OF_SEMESTER', 'PUBLISHED', '20000000-0000-0000-0000-000000000001',
+   'CSC101/test/rank-text-match.pdf', 'rank-text-match.pdf', 1000, 'application/pdf', repeat('i', 64),
+   'This exam covers various physics topics including thermodynamics in question 3.'),
+  ('a1000000-0000-0000-0000-000000000007', 'Unrelated Chemistry Paper', '44444444-4444-4444-4444-444444444401',
+   '11111111-1111-1111-1111-111111111101', '22222222-2222-2222-2222-222222222201',
+   '55555555-5555-5555-5555-555555555502', '66666666-6666-6666-6666-666666666601',
+   'END_OF_SEMESTER', 'PUBLISHED', '20000000-0000-0000-0000-000000000001',
+   'CSC101/test/rank-no-match.pdf', 'rank-no-match.pdf', 1000, 'application/pdf', repeat('j', 64), 'Nothing to do with the search term at all.');
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare
+  first_id uuid;
+  second_id uuid;
+  match_count int;
+begin
+  select count(*) into match_count from search_examination_papers(p_query := 'thermodynamics', p_course_id := '44444444-4444-4444-4444-444444444401');
+  if match_count <> 2 then
+    raise exception 'FAIL: expected exactly 2 papers to match "thermodynamics" (title + extracted-text matches only, not the unrelated one), got %', match_count;
+  end if;
+
+  select id into first_id from search_examination_papers(p_query := 'thermodynamics', p_course_id := '44444444-4444-4444-4444-444444444401') order by rank desc limit 1 offset 0;
+  select id into second_id from search_examination_papers(p_query := 'thermodynamics', p_course_id := '44444444-4444-4444-4444-444444444401') order by rank desc limit 1 offset 1;
+
+  if first_id <> 'a1000000-0000-0000-0000-000000000005' then
+    raise exception 'FAIL: the title match should rank first (weight A beats weight C), got % first', first_id;
+  end if;
+  if second_id <> 'a1000000-0000-0000-0000-000000000006' then
+    raise exception 'FAIL: the extracted-text match should rank second, got % second', second_id;
+  end if;
+  raise notice 'PASS: search_examination_papers() ranks a title match above an extracted-text-only match and excludes non-matches entirely';
+end;
+$$;
+
+do $$
+declare reported_total bigint;
+begin
+  select total_count into reported_total from search_examination_papers(p_query := 'thermodynamics', p_course_id := '44444444-4444-4444-4444-444444444401', p_limit := 1) limit 1;
+  if reported_total <> 2 then
+    raise exception 'FAIL: total_count should reflect the true match count (2) even when p_limit caps the returned rows to 1, got %', reported_total;
+  end if;
+  raise notice 'PASS: search_examination_papers() total_count is correct independent of pagination limit';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 20 (Loop 08): search_examination_papers() is SECURITY
+-- INVOKER, not DEFINER - RLS still governs visibility even though the
+-- caller can pass an explicit status filter directly. A student
+-- cannot use the search RPC to enumerate DRAFT papers just because
+-- they know how to ask for them.
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from search_examination_papers(p_status := 'DRAFT', p_course_id := '44444444-4444-4444-4444-444444444401');
+  if visible_count <> 0 then
+    raise exception 'FAIL: a student explicitly requesting status=DRAFT via the search RPC should still see 0 rows (RLS-blocked), saw %', visible_count;
+  end if;
+  raise notice 'PASS: the search RPC does not let a student bypass RLS by asking for DRAFT papers directly';
+end;
+$$;
+
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from search_examination_papers(p_status := 'DRAFT', p_course_id := '44444444-4444-4444-4444-444444444401');
+  if visible_count < 1 then
+    raise exception 'FAIL: the paper''s own uploader/course lecturer should still see their DRAFT paper via the search RPC, saw %', visible_count;
+  end if;
+  raise notice 'PASS: the search RPC still surfaces a DRAFT paper to its own uploader (RLS allows it, not blanket-denied)';
+end;
+$$;
+
+reset role;
+
 rollback;
 
 \echo 'All RLS/RBAC assertions passed.'
