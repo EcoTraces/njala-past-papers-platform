@@ -44,6 +44,31 @@ describe('validatePaperUpload', () => {
     const b = validatePaperUpload(Buffer.from(content), 'application/pdf');
     expect(a.checksumSha256).toBe(b.checksumSha256);
   });
+
+  it('accepts a filename with a .pdf extension', () => {
+    const buffer = Buffer.concat([PDF_HEADER, Buffer.from('x')]);
+    expect(() => validatePaperUpload(buffer, 'application/pdf', 'CSC101-2024-final.pdf')).not.toThrow();
+  });
+
+  it('accepts a .PDF extension case-insensitively', () => {
+    const buffer = Buffer.concat([PDF_HEADER, Buffer.from('x')]);
+    expect(() => validatePaperUpload(buffer, 'application/pdf', 'CSC101-2024-FINAL.PDF')).not.toThrow();
+  });
+
+  it('rejects a filename with a disguised double extension (e.g. "paper.pdf.exe")', () => {
+    const buffer = Buffer.concat([PDF_HEADER, Buffer.from('x')]);
+    expect(() => validatePaperUpload(buffer, 'application/pdf', 'paper.pdf.exe')).toThrow(ValidationError);
+  });
+
+  it('rejects a filename with no .pdf extension even when the declared MIME type and magic bytes both check out', () => {
+    const buffer = Buffer.concat([PDF_HEADER, Buffer.from('x')]);
+    expect(() => validatePaperUpload(buffer, 'application/pdf', 'paper.docx')).toThrow(ValidationError);
+  });
+
+  it('does not require a filename at all (extension check only applies when one is supplied)', () => {
+    const buffer = Buffer.concat([PDF_HEADER, Buffer.from('x')]);
+    expect(() => validatePaperUpload(buffer, 'application/pdf', undefined)).not.toThrow();
+  });
 });
 
 describe('generateStorageKey', () => {

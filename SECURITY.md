@@ -63,15 +63,18 @@ Three independent layers, in order of how much you should trust them:
    itself validates. This is the layer that still protects the data if
    an API route's authorization check is ever missing or wrong.
    Directly exercised by `supabase/tests/rls_rbac_assertions.sql`
-   against a real Postgres instance (see TESTING.md) - 15 scenarios
+   against a real Postgres instance (see TESTING.md) - 18 scenarios
    including IDOR, IDOR-adjacent (another student's practice session),
    IDOR on the paper workflow (an unrelated lecturer, a lecturer trying
-   to approve their own paper), IDOR-and-privilege-escalation (an ADMIN
-   granting SUPER_ADMIN, a lecturer self-assigning course ownership),
-   mass-assignment-via-UPDATE (a lecturer reassigning a paper's
-   `uploaded_by`), direct unauthorized storage access (bypassing the
-   signed-URL flow to read `storage.objects` directly), and anonymous
-   access boundaries.
+   to approve their own paper), IDOR on paper version history (a
+   manually-supplied `paper_id` from an unrelated user, and a
+   manually-guessed historical `storage.objects` path),
+   IDOR-and-privilege-escalation (an ADMIN granting SUPER_ADMIN, a
+   lecturer self-assigning course ownership), mass-assignment-via-UPDATE
+   (a lecturer reassigning a paper's `uploaded_by`), direct unauthorized
+   storage access (bypassing the signed-URL flow to read
+   `storage.objects` directly), duplicate-content detection at the
+   database constraint level, and anonymous access boundaries.
 
 `apps/api` additionally uses a **per-request, token-scoped Supabase
 client** (`request.db`) for ordinary reads/writes instead of the

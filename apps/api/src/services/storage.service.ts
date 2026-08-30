@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { ALLOWED_PAPER_MIME_TYPES, MAX_PAPER_UPLOAD_BYTES } from '@njala/shared';
+import { ALLOWED_PAPER_EXTENSIONS, ALLOWED_PAPER_MIME_TYPES, MAX_PAPER_UPLOAD_BYTES } from '@njala/shared';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { env } from '../config/env.js';
 import { ValidationError } from '../lib/errors.js';
@@ -14,12 +14,15 @@ export interface ValidatedUpload {
 }
 
 /**
- * Validates a candidate paper upload: size limit, declared MIME type,
- * and a magic-byte sniff so a renamed non-PDF can't slip through. The
- * caller's filename is used only for display (original_filename) -
- * never as part of the storage path.
+ * Validates a candidate paper upload against four independent checks -
+ * declared MIME type, filename extension, size limit, and a magic-byte
+ * sniff of the actual content - so a renamed non-PDF can't slip through
+ * by satisfying only one or two of them (e.g. a "report.pdf" that is
+ * actually a script, or a real PDF renamed "report.pdf.exe"). The
+ * filename is used only for this check and for display
+ * (original_filename) - never as part of the storage path.
  */
-export function validatePaperUpload(buffer: Buffer, declaredMimeType: string): ValidatedUpload {
+export function validatePaperUpload(buffer: Buffer, declaredMimeType: string, originalFilename?: string): ValidatedUpload {
   if (buffer.length === 0) {
     throw new ValidationError('Uploaded file is empty');
   }
@@ -28,6 +31,13 @@ export function validatePaperUpload(buffer: Buffer, declaredMimeType: string): V
   }
   if (!ALLOWED_PAPER_MIME_TYPES.includes(declaredMimeType as (typeof ALLOWED_PAPER_MIME_TYPES)[number])) {
     throw new ValidationError('Only PDF files are accepted');
+  }
+  if (originalFilename) {
+    const lowerName = originalFilename.toLowerCase();
+    const hasAllowedExtension = ALLOWED_PAPER_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+    if (!hasAllowedExtension) {
+      throw new ValidationError(`File name must end in ${ALLOWED_PAPER_EXTENSIONS.join(' or ')}`);
+    }
   }
   if (!buffer.subarray(0, 5).equals(PDF_MAGIC_BYTES)) {
     throw new ValidationError('File content does not match a valid PDF (failed signature check)');

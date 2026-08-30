@@ -171,6 +171,92 @@ source rather than trusting the earlier audit:
   drawer, distinct from and already more careful than the public
   header that had the bug above) wasn't touched in this pass.
 
+## Findings from Loop 06 (past-paper lifecycle: versioning, validation, real-file/IDOR testing)
+
+- **`[MISSING]` → implemented: paper versioning.** `paper_versions` and
+  its RLS policies (`paper_versions_select`/`paper_versions_insert`)
+  existed since the initial schema build but had zero API surface -
+  nothing ever wrote to the table. Added `GET /api/papers/:id/versions`
+  (superseded-file history, RLS-scoped visibility) and
+  `POST /api/papers/:id/versions` (multipart replace: validates the new
+  file, rejects an identical-content re-upload, updates
+  `examination_papers` to the new file *before* archiving the old one
+  into `paper_versions` - deliberately ordered so a rejected update
+  never leaves a stale history row behind for a replacement that didn't
+  actually happen - re-queues OCR, records an audit event). Orphaned
+  storage objects are cleaned up on any failure path via the
+  previously-dead-code `deletePaperFile`.
+- **`[BUG]` → fixed: the original upload handler's own comment was
+  aspirational, not real.** It claimed to "roll back the orphaned file
+  if the metadata row failed" but never actually called
+  `deletePaperFile` - a failed insert (most commonly the
+  `uidx_papers_dedupe` unique-constraint hit) left the file sitting in
+  Storage forever with nothing pointing at it, and surfaced to the
+  caller as a masked generic `500` rather than a `409`. Fixed: real
+  cleanup + a `23505` → `ConflictError` (409, clear message) mapping,
+  applied to both the original upload path and the new version-replace
+  path.
+- **`[BUG]` → fixed: an RLS-rejected version replace fell through to a
+  masked `500` instead of `403`.** `POST /:id/versions` is gated to
+  LECTURER/LIBRARY_STAFF/ADMIN/SUPER_ADMIN at the route level, but
+  authorization for *this specific paper* is RLS's job
+  (`papers_update_own_draft` / `papers_update_staff`) - e.g. a lecturer
+  who can see a course's papers via `papers_select_course_lecturer` but
+  didn't upload a given one. A 0-row RLS-rejected UPDATE surfaces from
+  Supabase as a `PGRST116` Postgrest error with no numeric
+  `statusCode`, which the central error handler was falling through to
+  a generic masked `500` for - found by tracing exactly this path while
+  writing the adversarial IDOR tests below, before it ever hit a real
+  request. Fixed to match the established pattern already used in
+  `transitionPaperStatus`: a non-unique-violation update failure is now
+  a proper `ForbiddenError` (403).
+- **`[MISSING]` → added: filename-extension validation as a third,
+  independent check.** `validatePaperUpload` previously checked only
+  the declared MIME type and the file's magic bytes; a filename never
+  factored in at all. Added `ALLOWED_PAPER_EXTENSIONS` (`packages/shared`)
+  and a case-insensitive suffix check, so `paper.pdf.exe` (disguised
+  double extension) or `paper.docx` (wrong extension, even with a
+  correct MIME type and valid PDF bytes) are both rejected. All three
+  checks are independent - a file can fail any one of them regardless
+  of what the other two say.
+- **Tested the entire workflow against real files, not synthesized
+  buffers.** Generated genuine PDFs via PyMuPDF (the same library
+  `apps/document-service` uses for real extraction) into
+  `apps/api/test-fixtures/`, and added
+  `storage.service.real-files.test.ts`: loads them from disk and drives
+  them through the real `validatePaperUpload`, including a checksum
+  computed by Node's `createHash('sha256')` cross-verified against the
+  independent OS `sha256sum` tool for the exact same bytes. The
+  `supabase/tests/rls_rbac_assertions.sql` duplicate-detection scenario
+  (below) reuses that same real, independently-verified checksum rather
+  than a synthetic value.
+- **Explicit adversarial pass: unauthorized access via manually
+  modified paper IDs and storage paths.** Extended
+  `rls_rbac_assertions.sql` from 14 to 18 scenarios: (15) the
+  `uidx_papers_dedupe` unique constraint actually blocks a
+  duplicate-content insert for the same course/examination-type/
+  academic-year, using the real fixture checksum from above; (16)
+  `paper_versions` visibility mirrors the paper it belongs to - owner
+  and staff can read it, a student manually supplying another user's
+  `paper_id` sees zero rows; (17) `paper_versions` insert authority - an
+  unrelated lecturer cannot insert a version row against a `paper_id`
+  they neither own nor administer, even by directly setting
+  `uploaded_by` to themselves; (18) a manually-guessed/known superseded
+  version's exact `storage.objects` path is still invisible to a
+  student, mirroring the existing published-vs-draft storage test but
+  specifically for version history. Also added an HTTP-level RBAC test
+  (`papers.rbac.test.ts`) proving a STUDENT is rejected at the
+  preHandler role gate before ever reaching `POST /:id/versions`'s
+  multipart parsing.
+- **Not done this pass**: a true browser-driven, authenticated
+  end-to-end upload flow (Playwright hitting a live API + Supabase
+  Storage) - this environment has no live Supabase project to sign in
+  against or store real objects in, same limitation noted in Loop 05.
+  The "actual files" requirement is instead met at the layer that's
+  actually reachable here: real PDF bytes driven through the real
+  validation/checksum code, and a real Postgres instance for the
+  RLS/constraint-level checks.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -192,7 +278,7 @@ from a clean checkout.
 | Loading/empty/error states | `[COMPLETE]` | `Spinner`/`PageSpinner`/`EmptyState` used consistently; every mutation surfaces `ApiError.message` |
 | Responsive layout | `[COMPLETE]` | Manually verified with real screenshots at 375px/768px/1440px (see Loop 05) - found and fixed a real bug: the public-page header had no responsive treatment and overflowed horizontally on mobile |
 | Charts (Recharts) | `[COMPLETE]` | New `/app/analytics` page (ADMIN/SUPER_ADMIN/LIBRARY_STAFF) renders real bar charts from `/api/analytics`'s most-viewed/most-downloaded paper data, code-split via `React.lazy` so the heavy Recharts dependency doesn't bloat the main bundle |
-| Paper version replace-file UI | `[MISSING]` | `paper_versions` table + nothing on top of it in the API/UI |
+| Paper version replace-file UI | `[MISSING]` | API now supports it (`GET`/`POST /api/papers/:id/versions`, Loop 06) - no frontend screen yet |
 | Paper category tagging UI | `[MISSING]` | `paper_categories`/`paper_category_links` tables exist, no UI |
 | Bundle size | `[technical debt]` | Main chunk is ~630KB (Analytics/Recharts is now split out at ~375KB, loaded only when visited); the remaining main chunk still exceeds Vite's 500KB warning and would benefit from further route-splitting (e.g. the PDF viewer route, admin routes) |
 
@@ -203,7 +289,7 @@ from a clean checkout.
 | Auth (student ID + staff email, signup, login, logout, /me, password-reset request) | `[COMPLETE]` | Account activation now genuinely enforced (see above) |
 | RBAC middleware (`requireRole`/`requirePermission`) | `[COMPLETE]` | Unit-tested; every route audited this pass has an explicit `preHandler` or plugin-scoped `addHook` - no unprotected mutation found |
 | Academic structure CRUD (faculties/departments/programmes/courses/academic-years/semesters) | `[COMPLETE]` | |
-| Paper workflow (upload/submit/review/approve/publish/reject/archive/delete/download/bookmark) | `[COMPLETE]` | State machine enforced in code + RLS; unit-tested |
+| Paper workflow (upload/submit/review/approve/publish/reject/archive/delete/download/bookmark/version-replace) | `[COMPLETE]` | State machine enforced in code + RLS; unit-tested. Versioning added Loop 06: `GET`/`POST /:id/versions`, three-independent-check upload validation (MIME/extension/magic-bytes), orphaned-storage-object cleanup, duplicate-content 409s |
 | Question bank (create/read/update/verify/delete) | `[COMPLETE]` | Answer/`is_correct` stripped for non-staff at the route layer (defense in depth on top of RLS) |
 | Practice (sessions/answers/submit/manual marking) | `[COMPLETE]` | Deterministic auto-marking verified at the DB layer |
 | Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Analytics is basic (counts, top lists) - no time-series/export |
@@ -245,11 +331,11 @@ from a clean checkout.
 | Suite | Status | Count |
 |---|---|---|
 | `packages/shared` unit | `[COMPLETE]` | 19 |
-| `apps/api` unit + integration | `[COMPLETE]` | 57 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration) |
+| `apps/api` unit + integration | `[COMPLETE]` | 69 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06)) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 8, public-routes-only (incl. 2 responsive-layout regression tests added in Loop 05); no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 4 |
-| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 15 scenarios: the original 11 plus direct storage.objects access, lecturer course-ownership self-assignment, and mass-assignment-via-UPDATE (`uploaded_by` reassignment) |
+| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 18 scenarios: the original 14 plus duplicate-content-detection-at-the-DB-constraint-level (using a real fixture checksum), `paper_versions` select/insert authorization, and a manually-guessed superseded-version storage path (Loop 06) |
 
 ## Prioritized implementation checklist (highest priority first)
 
@@ -260,7 +346,8 @@ from a clean checkout.
 5. ~~Loop 03: add `app.inject()`-based HTTP integration tests proving the exact attack scenarios listed in the brief; add a stricter rate limit on `/api/auth/*`.~~ **done - also found and fixed two real bugs (app couldn't boot; 429s were masked as 500s) that only surfaced once something finally booted the real app**
 6. ~~Loop 04: confirm every module is real; no orphan routes.~~ **done - confirmed, and extended RBAC HTTP-integration coverage to the paper/question/practice modules (12 more tests)**
 7. ~~Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; code-split the resulting bundle.~~ **done - found and fixed a real mobile header overflow bug along the way**
-8. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment.
+8. ~~Loop 06: implement paper versioning, filename-extension validation, real-file testing, and an explicit paper-ID/storage-path IDOR adversarial pass.~~ **done - found and fixed two real bugs (a fake rollback comment with no actual rollback behind it; an RLS-rejected version replace masked as a 500 instead of 403) along the way**
+9. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment.
 
 ## Verification (this pass)
 
@@ -268,7 +355,7 @@ from a clean checkout.
 npm run build            # shared → api → web, all clean, test files excluded from all three dist/ outputs
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
-npm run test               # shared 19, api 57, web 2 - all passing (78 total)
-bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 15/15 RLS/RBAC scenarios passing, fresh DB
+npm run test               # shared 19, api 69, web 2 - all passing (90 total)
+bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 18/18 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 8/8 e2e passing
 ```

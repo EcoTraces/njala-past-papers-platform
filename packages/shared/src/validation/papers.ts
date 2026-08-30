@@ -41,4 +41,8 @@ export const paperRejectSchema = z.object({
 /** Allowed upload MIME type - PDF only, enforced again server-side by
  *  magic-byte sniffing, not just this declared type. */
 export const ALLOWED_PAPER_MIME_TYPES = ['application/pdf'] as const;
+/** Enforced server-side against the client-supplied filename, in
+ *  addition to (never instead of) the MIME type and magic-byte checks -
+ *  a file can fail any one of the three independently. */
+export const ALLOWED_PAPER_EXTENSIONS = ['.pdf'] as const;
 export const MAX_PAPER_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB

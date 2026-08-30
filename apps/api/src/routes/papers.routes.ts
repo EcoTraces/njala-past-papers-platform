@@ -3,11 +3,11 @@ import { paperMetadataSchema, paperRejectSchema, paperReviewActionSchema, paperS
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
 import { assertLecturerOwnsCourse, transitionPaperStatus } from '../services/papers.service.js';
-import { createSignedUrl, generateStorageKey, uploadPaperFile, validatePaperUpload } from '../services/storage.service.js';
+import { createSignedUrl, deletePaperFile, generateStorageKey, uploadPaperFile, validatePaperUpload } from '../services/storage.service.js';
 import { queueDocumentProcessing } from '../services/documentProcessing.service.js';
 import { recordAuditEvent } from '../services/audit.service.js';
 import { notifyUser } from '../services/notifications.service.js';
-import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 
 const STAFF_UPLOAD_ROLES = requireRole('LECTURER', 'LIBRARY_STAFF', 'ADMIN', 'SUPER_ADMIN');
@@ -139,7 +139,7 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
         .single();
       if (courseError || !course) throw new ValidationError('Unknown course');
 
-      const validated = validatePaperUpload(fileBuffer, mimeType || 'application/pdf');
+      const validated = validatePaperUpload(fileBuffer, mimeType || 'application/pdf', fields.filename);
       const storagePath = generateStorageKey(course.code);
       await uploadPaperFile(storagePath, validated.buffer);
 
@@ -171,8 +171,18 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
         .single();
 
       if (error) {
-        // Roll back the orphaned file if the metadata row failed
-        // (e.g. duplicate-checksum unique constraint).
+        // The file is already in Storage at this point but the metadata
+        // row failed - most commonly a duplicate-checksum unique
+        // constraint violation (this exact file already exists for this
+        // course/exam type/academic year). Don't leave the orphaned
+        // object behind, and surface duplicates as a clear 409 rather
+        // than a generic masked 500.
+        await deletePaperFile(storagePath).catch((cleanupErr) => {
+          request.log.error({ err: cleanupErr, storagePath }, 'Failed to clean up orphaned storage object after a failed paper insert');
+        });
+        if (isUniqueViolation(error)) {
+          throw new ConflictError('A paper with identical content already exists for this course, examination type, and academic year');
+        }
         throw error;
       }
 
@@ -198,6 +208,132 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
     if (error) throw error;
     return data;
   });
+
+  app.get('/:id/versions', { preHandler: authenticate, schema: { tags: ['papers'], summary: 'List the version history of a paper (superseded files, not the current one)' } }, async (request) => {
+    const { id } = request.params as { id: string };
+    const { data, error } = await request.db
+      .from('paper_versions')
+      .select('id, version_number, storage_path, file_size_bytes, checksum_sha256, uploaded_by, created_at')
+      .eq('paper_id', id)
+      .order('version_number', { ascending: false });
+    if (error) throw error;
+    return { items: data };
+  });
+
+  app.post(
+    '/:id/versions',
+    { preHandler: [authenticate, STAFF_UPLOAD_ROLES], schema: { tags: ['papers'], summary: 'Replace a paper\'s file with a new version (multipart: file), preserving the old one in history' } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+
+      const { data: paper, error: paperError } = await request.db
+        .from('examination_papers')
+        .select('id, storage_path, checksum_sha256, file_size_bytes, courses(code)')
+        .eq('id', id)
+        .maybeSingle();
+      if (paperError) throw paperError;
+      if (!paper) throw new NotFoundError('Examination paper');
+
+      const parts = request.parts();
+      let fileBuffer: Buffer | null = null;
+      let mimeType = '';
+      const fields: Record<string, string> = {};
+
+      for await (const part of parts) {
+        if (part.type === 'file') {
+          fileBuffer = await part.toBuffer();
+          mimeType = part.mimetype;
+        } else {
+          fields[part.fieldname] = String(part.value);
+        }
+      }
+
+      if (!fileBuffer) throw new ValidationError('A replacement PDF file is required');
+
+      const validated = validatePaperUpload(fileBuffer, mimeType || 'application/pdf', fields.filename);
+
+      if (validated.checksumSha256 === paper.checksum_sha256) {
+        throw new ValidationError('This file is identical to the current version - nothing to replace');
+      }
+
+      const courseCode = (paper as unknown as { courses: { code: string } | null }).courses?.code ?? 'PAPER';
+      const newStoragePath = generateStorageKey(courseCode);
+      await uploadPaperFile(newStoragePath, validated.buffer);
+
+      // Update examination_papers to the new file *first*. If this is
+      // rejected (RLS - not authorized to replace this paper's file -
+      // or a unique-constraint collision with a different paper's
+      // checksum), nothing else has changed yet: no stale
+      // paper_versions row gets left behind for a replacement that
+      // never actually took effect.
+      const { data: updated, error: updateError } = await request.db
+        .from('examination_papers')
+        .update({
+          storage_path: newStoragePath,
+          original_filename: (fields.filename ?? 'paper.pdf').slice(0, 255),
+          file_size_bytes: validated.sizeBytes,
+          mime_type: validated.mimeType,
+          checksum_sha256: validated.checksumSha256,
+          page_count: null,
+          extracted_text: null,
+          ocr_status: 'QUEUED',
+        })
+        .eq('id', id)
+        .select()
+        .single();
+      if (updateError || !updated) {
+        await deletePaperFile(newStoragePath).catch((cleanupErr) => {
+          request.log.error({ err: cleanupErr, storagePath: newStoragePath }, 'Failed to clean up orphaned storage object after a failed paper version replace');
+        });
+        if (isUniqueViolation(updateError)) {
+          throw new ConflictError('A paper with identical content already exists for this course, examination type, and academic year');
+        }
+        // Zero rows matched the RLS-scoped UPDATE (PostgREST's PGRST116
+        // via .single()) - the caller passed the STAFF_UPLOAD_ROLES
+        // preHandler but is not actually authorized for *this* paper
+        // (not its owner while it's a DRAFT, and not staff). Postgrest
+        // errors carry no numeric statusCode, so without this they'd
+        // fall through the central handler to a masked 500 instead of
+        // the 403 this actually is.
+        throw new ForbiddenError('You are not authorized to replace this paper\'s file');
+      }
+
+      // Now archive the file that was just replaced. A failure here
+      // is logged, not thrown - the replacement itself already
+      // succeeded and must not be rolled back over a history-logging
+      // failure; it just means this one supersession is missing from
+      // paper_versions (the file itself was already safely uploaded
+      // under its old key and is not deleted).
+      const { count: existingVersions } = await request.db
+        .from('paper_versions')
+        .select('id', { count: 'exact', head: true })
+        .eq('paper_id', id);
+      const { error: versionError } = await request.db.from('paper_versions').insert({
+        paper_id: id,
+        version_number: (existingVersions ?? 0) + 1,
+        storage_path: paper.storage_path,
+        file_size_bytes: paper.file_size_bytes,
+        checksum_sha256: paper.checksum_sha256,
+        uploaded_by: request.user!.id,
+      });
+      if (versionError) {
+        request.log.error({ err: versionError, paperId: id }, 'Paper file was replaced but archiving the superseded version failed');
+      }
+
+      await queueDocumentProcessing(id, request.user!.id);
+      await recordAuditEvent({
+        actorId: request.user!.id,
+        action: 'paper.version_replace',
+        entityType: 'examination_papers',
+        entityId: id,
+        request,
+        metadata: { previousChecksum: paper.checksum_sha256, newChecksum: validated.checksumSha256 },
+      });
+
+      reply.status(200);
+      return updated;
+    },
+  );
 
   app.post('/:id/submit', { preHandler: [authenticate, STAFF_UPLOAD_ROLES], schema: { tags: ['papers'] } }, async (request) => {
     const { id } = request.params as { id: string };
@@ -283,6 +419,13 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
     if (error) throw error;
     reply.status(204);
   });
+}
+
+/** Postgres unique_violation (SQLSTATE 23505) - what the
+ *  `uidx_papers_dedupe` constraint raises for a duplicate-content
+ *  upload (same course + examination type + academic year + checksum). */
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code: unknown }).code === '23505');
 }
 
 async function notifyPaperUploader(paperId: string, type: 'PAPER_APPROVED' | 'PAPER_PUBLISHED' | 'PAPER_REJECTED', title: string): Promise<void> {

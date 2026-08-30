@@ -192,3 +192,56 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   none found.
 - 8/8 e2e passing (up from 6); full monorepo build/typecheck/lint
   clean.
+
+## [Unreleased] - Past-paper lifecycle: versioning, validation, real-file/IDOR testing (Loop 06)
+
+### Added
+
+- `GET`/`POST /api/papers/:id/versions`: full file-versioning support.
+  `paper_versions` and its RLS policies existed since the initial
+  schema but had no API surface until now. Replacing a file validates
+  the new upload, rejects an identical-content re-upload, updates
+  `examination_papers` to the new file, archives the superseded file
+  into `paper_versions`, re-queues OCR, and records an audit event.
+- Filename-extension validation (`ALLOWED_PAPER_EXTENSIONS`) as a
+  third check in `validatePaperUpload`, independent of the existing
+  declared-MIME-type and magic-byte checks - catches a disguised
+  double extension (`paper.pdf.exe`) or a wrong extension even when
+  the MIME type and file bytes both check out.
+- `apps/api/test-fixtures/`: real PDFs generated via PyMuPDF (not
+  hand-built buffers) plus a real non-PDF file with a `.pdf`
+  extension, and `storage.service.real-files.test.ts` (6 tests)
+  driving them through the real validation/checksum code - including a
+  checksum cross-verified against the OS `sha256sum` tool.
+- 4 new `supabase/tests/rls_rbac_assertions.sql` scenarios (14 → 18):
+  duplicate-content detection at the DB constraint level using a real
+  fixture checksum; `paper_versions` select/insert authorization
+  (owner/staff only, a manually-supplied `paper_id` from an unrelated
+  user is blocked); a manually-guessed superseded-version storage path
+  is still invisible to a student.
+- An HTTP-level RBAC test proving a STUDENT is rejected at the
+  preHandler role gate before `POST /:id/versions` ever parses the
+  multipart body.
+
+### Fixed
+
+- The original upload handler's "roll back the orphaned file" comment
+  was aspirational - `deletePaperFile` was dead code, never called. A
+  failed insert (most commonly a duplicate-checksum unique-constraint
+  hit) left the file sitting in Storage with nothing pointing at it,
+  and surfaced as a masked `500` instead of a clear `409`. Fixed in
+  both the original upload path and the new version-replace path.
+- An RLS-rejected version replace (role check passes, but the caller
+  isn't authorized for *this* paper) fell through the central error
+  handler to a masked `500` instead of a `403` - Postgrest's
+  `PGRST116` (zero rows matched) carries no numeric `statusCode`.
+  Fixed to match the existing `transitionPaperStatus` pattern: mapped
+  to `ForbiddenError`.
+
+### Verified
+
+- `npm run build`/`typecheck`/`lint`/`test` all clean; 90 tests passing
+  (up from 78: +6 extension-validation unit, +6 real-PDF-fixture
+  integration, +1 versioning RBAC HTTP-integration).
+- 18/18 RLS/RBAC scenarios passing against a freshly recreated
+  Postgres instance.

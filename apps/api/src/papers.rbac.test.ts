@@ -90,6 +90,16 @@ describe('paper workflow / question bank / practice RBAC, end to end through the
     expect(res.statusCode).toBe(403);
   });
 
+  it('rejects a STUDENT replacing a paper\'s file (POST /api/papers/:id/versions is staff-upload-role only)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/papers/11111111-1111-1111-1111-111111111111/versions',
+      headers: { ...auth('student-token'), 'content-type': 'application/json' },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('rejects a STUDENT creating a question (POST /api/questions is LECTURER/LIBRARY_STAFF/ADMIN only)', async () => {
     const res = await app.inject({
       method: 'POST',

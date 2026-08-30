@@ -50,6 +50,8 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 | GET | `/:id` | ✓ | Full paper detail; records a view |
 | POST | `/` | ✓ (LECTURER/LIBRARY_STAFF/ADMIN) | Multipart upload (file + metadata fields); creates as `DRAFT`, queues OCR |
 | PATCH | `/:id` | ✓ (owner, staff) | Edit metadata |
+| GET | `/:id/versions` | ✓ (owner, staff) | Superseded file history (not the current file - that's on the paper itself) |
+| POST | `/:id/versions` | ✓ (owner's `DRAFT`, or staff any status) | Multipart replace (file only); archives the old file into history, re-queues OCR. Rejects an identical-content re-upload and a checksum collision with a different paper (409) |
 | POST | `/:id/submit` | ✓ (owner) | `DRAFT` → `SUBMITTED` |
 | POST | `/:id/review` | ✓ (LIBRARY_STAFF/ADMIN) | `SUBMITTED` → `UNDER_REVIEW` |
 | POST | `/:id/approve` | ✓ (LIBRARY_STAFF/ADMIN) | `UNDER_REVIEW` → `APPROVED` |

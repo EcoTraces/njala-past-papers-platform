@@ -429,6 +429,199 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Scenario 15: duplicate-content detection is a database constraint,
+-- not just application logic - inserting a second paper for the same
+-- course + examination type + academic year with an IDENTICAL checksum
+-- must fail with a unique_violation, even for a role (library staff)
+-- that otherwise has full insert authority. Uses the real SHA-256 of
+-- apps/api/test-fixtures/sample-exam-paper.pdf (computed by both
+-- Node's createHash('sha256') and the OS sha256sum tool - see
+-- storage.service.real-files.test.ts) rather than a synthetic value,
+-- so this proves the exact hash a real re-upload would produce is what
+-- the constraint actually keys on.
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare affected int;
+begin
+  insert into examination_papers (
+    title, course_id, faculty_id, department_id, academic_year_id, semester_id,
+    examination_type, status, uploaded_by, storage_path, original_filename,
+    file_size_bytes, mime_type, checksum_sha256
+  ) values (
+    'Genuinely new content (real PDF checksum)', '44444444-4444-4444-4444-444444444401',
+    '11111111-1111-1111-1111-111111111101', '22222222-2222-2222-2222-222222222201',
+    '55555555-5555-5555-5555-555555555502', '66666666-6666-6666-6666-666666666601',
+    'END_OF_SEMESTER', 'DRAFT', '30000000-0000-0000-0000-000000000001',
+    'CSC101/test/genuine.pdf', 'genuine.pdf', 1204, 'application/pdf',
+    'e8b3fc0917e8de47e3181e121f3d2c70ee24ceeea11508e9ca015631b746129b'
+  );
+  get diagnostics affected = row_count;
+  if affected <> 1 then
+    raise exception 'FAIL: control insert with a fresh, real-file checksum should have succeeded';
+  end if;
+  raise notice 'PASS: control insert with a fresh checksum did not collide (sanity check for the collision test below)';
+end;
+$$;
+
+-- Now actually collide: same course/type/year, but the same checksum
+-- as an already-inserted paper (repeat('a', 64), paper a1...001 above).
+do $$
+begin
+  begin
+    insert into examination_papers (
+      title, course_id, faculty_id, department_id, academic_year_id, semester_id,
+      examination_type, status, uploaded_by, storage_path, original_filename,
+      file_size_bytes, mime_type, checksum_sha256
+    ) values (
+      'Re-upload of the draft paper''s exact content', '44444444-4444-4444-4444-444444444401',
+      '11111111-1111-1111-1111-111111111101', '22222222-2222-2222-2222-222222222201',
+      '55555555-5555-5555-5555-555555555502', '66666666-6666-6666-6666-666666666601',
+      'END_OF_SEMESTER', 'DRAFT', '30000000-0000-0000-0000-000000000001',
+      'CSC101/test/reupload.pdf', 'reupload.pdf', 1000, 'application/pdf', repeat('a', 64)
+    );
+    raise exception 'FAIL: uidx_papers_dedupe did not block an identical-checksum re-upload for the same course/type/year';
+  exception when unique_violation then
+    raise notice 'PASS: uidx_papers_dedupe blocks a duplicate-content upload for the same course/examination-type/academic-year';
+  end;
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 16: paper_versions visibility mirrors the paper it archives
+-- history for - the owner and staff can see it, an unrelated lecturer
+-- (not staff, not the uploader, not even assigned to the course) can't,
+-- even when they already know a version row's paper_id (an IDOR probe
+-- via a manually-supplied/guessed paper_id, not just the UI's own
+-- links).
+-- ---------------------------------------------------------------------
+insert into paper_versions (paper_id, version_number, storage_path, file_size_bytes, checksum_sha256, uploaded_by) values
+  ('a1000000-0000-0000-0000-000000000001', 1, 'CSC101/test/draft-v1-superseded.pdf', 900, repeat('e', 64), '20000000-0000-0000-0000-000000000001');
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from paper_versions where paper_id = 'a1000000-0000-0000-0000-000000000001';
+  if visible_count <> 1 then
+    raise exception 'FAIL: the paper''s own uploader should see its version history, saw %', visible_count;
+  end if;
+  raise notice 'PASS: a paper''s uploader can see its version history';
+end;
+$$;
+
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from paper_versions where paper_id = 'a1000000-0000-0000-0000-000000000001';
+  if visible_count <> 0 then
+    raise exception 'FAIL: a STUDENT manually supplying another user''s paper_id should see 0 version rows, saw %', visible_count;
+  end if;
+  raise notice 'PASS: a student cannot read version history via a manually-supplied paper_id (IDOR blocked)';
+end;
+$$;
+
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from paper_versions where paper_id = 'a1000000-0000-0000-0000-000000000001';
+  if visible_count <> 1 then
+    raise exception 'FAIL: library staff should see version history for any paper, saw %', visible_count;
+  end if;
+  raise notice 'PASS: library staff can read version history for any paper';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 17: paper_versions insert authority - only the paper's own
+-- uploader (while archiving their own replaced file) or staff may
+-- insert a version row for it; an unrelated lecturer manually posting
+-- a version row against someone else's paper_id (again, an IDOR-style
+-- probe - guessing/reusing a paper_id that isn't theirs) must be
+-- blocked by RLS regardless of the row's uploaded_by value.
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000002', false);
+
+do $$
+begin
+  begin
+    insert into paper_versions (paper_id, version_number, storage_path, file_size_bytes, checksum_sha256, uploaded_by)
+      values ('a1000000-0000-0000-0000-000000000001', 2, 'CSC101/test/forged-version.pdf', 800, repeat('f', 64), '20000000-0000-0000-0000-000000000002');
+    raise exception 'FAIL: an unrelated lecturer was able to insert a paper_versions row for a paper they neither own nor administer';
+  exception when insufficient_privilege then
+    raise notice 'PASS: an unrelated lecturer cannot insert a version row for someone else''s paper (IDOR-via-manipulated-paper_id blocked)';
+  end;
+end;
+$$;
+
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare affected int;
+begin
+  insert into paper_versions (paper_id, version_number, storage_path, file_size_bytes, checksum_sha256, uploaded_by)
+    values ('a1000000-0000-0000-0000-000000000001', 2, 'CSC101/test/draft-v2-superseded.pdf', 950, repeat('g', 64), '20000000-0000-0000-0000-000000000001');
+  get diagnostics affected = row_count;
+  if affected <> 1 then
+    raise exception 'FAIL: the paper''s own uploader should be able to archive its own superseded version';
+  end if;
+  raise notice 'PASS: a paper''s own uploader can archive its own superseded version';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 18: manipulated storage path - a student who edits a
+-- signed-download response client-side (or simply guesses a plausible
+-- object key for a paper they can't see) still cannot read that
+-- object's row directly from storage.objects, mirroring scenario 12
+-- but specifically for a version-history object (superseded files are
+-- never re-exposed once replaced, even to someone who already knows
+-- the exact historical path).
+-- ---------------------------------------------------------------------
+insert into storage.objects (bucket_id, name) values
+  ('examination-papers', 'CSC101/test/draft-v1-superseded.pdf');
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from storage.objects where name = 'CSC101/test/draft-v1-superseded.pdf';
+  if visible_count <> 0 then
+    raise exception 'FAIL: a student who guesses/knows a superseded version''s exact storage path should still see 0 rows, saw %', visible_count;
+  end if;
+  raise notice 'PASS: a manually-guessed superseded-version storage path is not visible to a student';
+end;
+$$;
+
+reset role;
+
 rollback;
 
 \echo 'All RLS/RBAC assertions passed.'

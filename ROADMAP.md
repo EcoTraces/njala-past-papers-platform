@@ -14,10 +14,12 @@ recorded in this repository's commit history - not just written.
   settings).
 - RLS on every table, private Storage bucket with signed URLs,
   SECURITY DEFINER helpers, a deterministic auto-marking trigger.
-- RLS/RBAC verified against a real Postgres instance (15 scenarios,
-  including direct storage.objects access and mass-assignment/
-  self-escalation attempts;
-  see TESTING.md), not just written and hoped-for.
+- RLS/RBAC verified against a real Postgres instance (18 scenarios,
+  including direct storage.objects access, mass-assignment/
+  self-escalation attempts, duplicate-content detection at the DB
+  constraint level, and paper-version-history IDOR probes via a
+  manually-supplied `paper_id`; see TESTING.md), not just written and
+  hoped-for.
 
 **Backend**
 - Fastify API: student-ID + staff-email auth (including a real
@@ -81,9 +83,10 @@ recorded in this repository's commit history - not just written.
   search - the current viewer uses the browser's native PDF rendering
   via an iframe pointed at a signed URL, which works but is simpler
   than a custom PDF.js integration.
-- No `paper_versions`/`paper_categories` UI (the tables and API-level
-  support exist; there's no frontend screen for replacing a file with
-  a new version or managing category tags yet).
+- No `paper_versions`/`paper_categories` UI. Versioning now has full
+  API support (`GET`/`POST /api/papers/:id/versions`, Loop 06) - only
+  the frontend screen for replacing a file is still missing.
+  `paper_categories` has neither API nor UI yet.
 - Analytics is limited to what `/api/analytics` and the dashboards
   expose (most-viewed/downloaded papers, basic counts). A dedicated
   `/app/analytics` page now renders this as real Recharts bar charts
@@ -113,6 +116,6 @@ recorded in this repository's commit history - not just written.
    notification-worthy events.
 3. Add a Supabase test project to CI and extend the Playwright suite to
    cover authenticated flows end-to-end.
-4. Build the `paper_versions` replace-file UI and `paper_categories`
-   tagging UI.
+4. Build the `paper_versions` replace-file UI (API is ready) and the
+   `paper_categories` tagging feature (API and UI both still missing).
 5. Add exportable reports/time-series trends to the analytics page.
