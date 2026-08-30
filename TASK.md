@@ -257,6 +257,96 @@ source rather than trusting the earlier audit:
   validation/checksum code, and a real Postgres instance for the
   RLS/constraint-level checks.
 
+## Findings from Loop 07 (Python document-processing service: async pipeline, retries, real files)
+
+- **`[BUG]` → fixed: `PROCESSING` was a dead enum value.** The
+  `processing_job_status`/`ocr_status` enums have had `QUEUED`,
+  `PROCESSING`, `COMPLETED`, `FAILED` since the original schema, but
+  nothing ever set a job to `PROCESSING` - the Python service went
+  straight from accepting a job to reporting `COMPLETED`/`FAILED`, so a
+  paper mid-extraction looked identical (from the DB's point of view)
+  to one still sitting untouched in the queue. Fixed: `apps/document-
+  service`'s background task now sends a `PROCESSING` callback the
+  instant it actually starts work, and `apps/api`'s callback handler
+  writes `started_at` and flips both the job and the paper's
+  `ocr_status` to it.
+- **`[BUG]` → fixed: `extract_document` (PyMuPDF + Tesseract, both
+  synchronous/CPU-bound) ran inline inside the async background task,
+  blocking the Python service's own event loop for the full duration of
+  every extraction/OCR run** - a second job, or even a health check,
+  had to wait behind whatever the first one was doing. Fixed: it now
+  runs via `asyncio.to_thread`, freeing the event loop, which also made
+  a real timeout enforceable (see below) - a plain blocking call can't
+  be cancelled by `asyncio.wait_for` on its own. Verified with a
+  regression test that deterministically proves the loop stayed
+  responsive during a blocking extraction, not just a timing-race
+  assertion.
+- **`[MISSING]` → implemented: retry handling for recoverable
+  failures**, explicitly called for in this loop and previously absent
+  entirely:
+  - `apps/document-service` now classifies every failure as
+    `recoverable` (couldn't download the file, timed out, an
+    unexpected/unclassified error) or not (a corrupt/unreadable PDF, an
+    oversized file - retrying the identical bytes changes nothing).
+  - `apps/api`'s dispatch step (`POST /jobs` to the Python service)
+    retries up to 3 times with backoff before giving up.
+  - `apps/api`'s callback handler automatically re-queues and
+    re-dispatches a `recoverable` `FAILED` report, up to
+    `MAX_AUTO_REPROCESS_ATTEMPTS = 2` additional attempts (tracked in
+    `document_processing_jobs.attempts`, a column that existed since
+    the original schema but was never incremented by anything).
+  - **`[BUG]` → fixed: a dispatch failure left the job silently stuck
+    at `QUEUED` forever.** The original code was `fetch(...).catch(err
+    => logger.error(...))` - fire-and-forget with no DB write on
+    failure at all, so the job never reached `FAILED` and therefore
+    never appeared on the library dashboard's "processing failures"
+    list (which filters on `status = FAILED`). A paper could sit
+    invisibly broken indefinitely. Fixed as part of the retry work
+    above.
+  - **`[MISSING]` → added: a manual retry action.** The library
+    dashboard's "processing failures" list showed the error but had no
+    remediation - literally a dead end for library staff. Added `POST
+    /api/papers/:id/reprocess` (LIBRARY_STAFF/ADMIN) and wired a
+    "Retry" button to it, plus surfaced the paper's actual title
+    (previously a raw UUID) and retry count on that list.
+- **`[BUG]` → fixed: one bad page could sink the whole OCR job.** A
+  single page whose rendered image made Tesseract throw (a malformed
+  embedded image, an OCR-engine crash) previously failed extraction for
+  every other page in the document too. Now each page's OCR call is
+  individually caught; a failing page contributes an empty string and
+  every other page still completes normally.
+- **`[MISSING]` → added: a hard processing timeout.** Nothing
+  previously bounded how long extraction/OCR could run - a
+  pathological PDF (huge page count, an image that pins Tesseract)
+  could tie up a worker indefinitely. Added
+  `processing_timeout_seconds` (120s default), enforced via
+  `asyncio.wait_for` around the thread-offloaded extraction; a timeout
+  is reported as a recoverable failure and auto-retried like any other.
+- **Tested against real files, not synthesized buffers**: built
+  genuinely scanned/image-only PDFs (PIL-rendered text burned into a
+  raster image with no text layer at all, then embedded into a PDF
+  page - not a text-based PDF that merely has few characters) to
+  exercise the actual Tesseract OCR path end-to-end, including a
+  multi-page document and a per-page-failure-resilience test. Also
+  tested a genuinely corrupt PDF (valid `%PDF-` header, garbage body)
+  and an oversized file, both asserted non-recoverable.
+- **Node-side unit/integration tests added** (previously zero coverage
+  for this module on the Node side): `documentProcessing.service.test.ts`
+  exercises the real DB-write logic (not just permission checks)
+  against a small in-memory fake of the two tables it touches, proving
+  the dispatch-retry-then-give-up-cleanly behavior and the
+  reprocess/auto-retry paths actually work; `internal.callback.test.ts`
+  drives the real Fastify app end-to-end through `app.inject()` for
+  the same scenarios at the HTTP layer, including the automatic-retry-
+  then-eventually-permanent-FAILED sequence.
+- **Not done this pass**: a real message queue (SQS/BullMQ/Cloud
+  Tasks) - the hand-rolled retry logic above closes the two failure
+  modes the brief calls out (dispatch failures, recoverable processing
+  failures) but a failed *callback* itself (the Python service
+  finished, but the POST back to Node failed) still has no automatic
+  recovery path - see `docs/architecture/document-processing.md`'s
+  failure-mode table for the honest accounting of what remains.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -295,7 +385,8 @@ from a clean checkout.
 | Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Analytics is basic (counts, top lists) - no time-series/export |
 | Notifications (list/mark-read/mark-all-read) | `[COMPLETE]` | Creation is system-only (no client insert), by design |
 | Admin (users/staff provisioning/status/roles/audit logs/system settings) | `[COMPLETE]` | |
-| Internal processing callback | `[COMPLETE]` | Shared-secret guarded, not a Fastify-auth route by design |
+| Internal processing callback | `[COMPLETE]` | Shared-secret guarded, not a Fastify-auth route by design. Handles `QUEUED`→`PROCESSING`→`COMPLETED`/`FAILED` (Loop 07); automatically re-queues a bounded number of recoverable failures |
+| Document processing pipeline (`apps/document-service`) | `[COMPLETE]` | Async, non-blocking dispatch; genuine `PROCESSING` state; extraction offloaded to a worker thread with a hard timeout; per-page OCR resilience; recoverable-vs-not failure classification driving automatic retry; manual `POST /:id/reprocess` for staff. See "Findings from Loop 07" |
 | OpenAPI/Swagger | `[COMPLETE]` | Served at `/api/docs`, generated from route schemas |
 | Rate limiting | `[COMPLETE]` | Global limiter plus a stricter per-route budget on `/api/auth/login`\|`/staff-login` (10/min), `/signup` and `/password-reset/request` (5/min); verified with a test that actually exceeds the budget and asserts a real `429` |
 | Structured logging, security headers, CORS allow-list | `[COMPLETE]` | |
@@ -331,10 +422,10 @@ from a clean checkout.
 | Suite | Status | Count |
 |---|---|---|
 | `packages/shared` unit | `[COMPLETE]` | 19 |
-| `apps/api` unit + integration | `[COMPLETE]` | 69 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06)) |
+| `apps/api` unit + integration | `[COMPLETE]` | 86 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06) + 8 document-processing service unit (Loop 07) + 7 internal-callback HTTP-integration (Loop 07) + 1 reprocess-endpoint RBAC (Loop 07)) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 8, public-routes-only (incl. 2 responsive-layout regression tests added in Loop 05); no authenticated-flow e2e (needs a seeded Supabase test project) |
-| `apps/document-service` (pytest) | `[COMPLETE]` | 4 |
+| `apps/document-service` (pytest) | `[COMPLETE]` | 16 (4 original + 6 real-scanned-PDF/OCR-resilience + 6 job-pipeline (PROCESSING callback, recoverable/non-recoverable classification, timeout, non-blocking-extraction) - all Loop 07) |
 | DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 18 scenarios: the original 14 plus duplicate-content-detection-at-the-DB-constraint-level (using a real fixture checksum), `paper_versions` select/insert authorization, and a manually-guessed superseded-version storage path (Loop 06) |
 
 ## Prioritized implementation checklist (highest priority first)
@@ -347,7 +438,8 @@ from a clean checkout.
 6. ~~Loop 04: confirm every module is real; no orphan routes.~~ **done - confirmed, and extended RBAC HTTP-integration coverage to the paper/question/practice modules (12 more tests)**
 7. ~~Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; code-split the resulting bundle.~~ **done - found and fixed a real mobile header overflow bug along the way**
 8. ~~Loop 06: implement paper versioning, filename-extension validation, real-file testing, and an explicit paper-ID/storage-path IDOR adversarial pass.~~ **done - found and fixed two real bugs (a fake rollback comment with no actual rollback behind it; an RLS-rejected version replace masked as a 500 instead of 403) along the way**
-9. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment.
+9. ~~Loop 07: audit/harden the Python document-processing pipeline - genuine `PROCESSING` state, non-blocking extraction with a hard timeout, retry handling for recoverable failures, real-scanned-PDF OCR testing.~~ **done - found and fixed three real bugs (`PROCESSING` was a dead enum value; extraction blocked the Python service's own event loop; a dispatch failure left a job silently stuck at `QUEUED` forever with no way to notice or recover) along the way**
+10. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment, a real message queue for document processing (a failed *callback* itself still has no automatic recovery - see docs/architecture/document-processing.md).
 
 ## Verification (this pass)
 
@@ -355,7 +447,8 @@ from a clean checkout.
 npm run build            # shared → api → web, all clean, test files excluded from all three dist/ outputs
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
-npm run test               # shared 19, api 69, web 2 - all passing (90 total)
+npm run test               # shared 19, api 86, web 2 - all passing (107 total)
 bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 18/18 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 8/8 e2e passing
+cd apps/document-service && python -m pytest tests/ && ruff check .   # 16/16 tests passing, lint clean
 ```

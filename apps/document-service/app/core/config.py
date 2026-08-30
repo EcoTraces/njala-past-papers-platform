@@ -22,5 +22,12 @@ class Settings(BaseSettings):
     # is treated as scanned/image-based and routed through OCR.
     ocr_trigger_chars_per_page: int = 40
 
+    # Hard ceiling on a single job's extraction/OCR work (runs in a
+    # worker thread so this timeout is actually enforceable - see
+    # routers/jobs.py). A pathological PDF (huge page count, an image
+    # that pins Tesseract) fails the job cleanly instead of tying up a
+    # worker indefinitely.
+    processing_timeout_seconds: int = 120
+
 
 settings = Settings()

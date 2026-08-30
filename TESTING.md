@@ -103,6 +103,18 @@ these tests makes a network call. Covers:
   use, so the ~50-line mock isn't duplicated a third time. Also
   excluded from the production build (`tsconfig.build.json`'s
   `src/test/**` exclusion).
+- `services/documentProcessing.service.test.ts` /
+  `internal.callback.test.ts` (Loop 07) - unlike the RBAC suites above
+  (which mock only what `authenticate()` needs and expect every
+  scenario to be rejected before touching the DB), these exercise the
+  real DB-write logic: a small in-memory fake of just the two tables
+  `documentProcessing.service.ts` touches, plus a mocked global `fetch`
+  standing in for `apps/document-service`. `documentProcessing.service.
+  test.ts` unit-tests the retry/dispatch logic directly (including a
+  real ~1.5s wall-clock wait for the "exhausts all retries" case - the
+  one deliberately slow test in this suite); `internal.callback.test.ts`
+  drives the same scenarios through the real Fastify app via
+  `app.inject()`, proving the PROCESSING/auto-retry wiring end to end.
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are
@@ -159,10 +171,31 @@ pytest -v
 Covers: health/readiness endpoints, the internal-secret guard on
 `POST /jobs` (401 without it), native-text PDF extraction (build a real
 PDF in-memory with PyMuPDF and confirm the extracted text round-trips),
-and rejection of a non-PDF buffer. OCR itself (the Tesseract path) is
-exercised implicitly by CI installing `tesseract-ocr` and importing
-`pytesseract`, but there is no dedicated OCR-image test in this suite
-yet - see ROADMAP.md.
+and rejection of a non-PDF buffer.
+
+- `test_pdf_processing_real_files.py` - the Tesseract OCR path
+  exercised for real, not just implicitly via CI installing
+  `tesseract-ocr`: builds genuinely scanned/image-only PDFs (PIL-
+  rendered text burned into a raster image with no text layer at all,
+  then embedded into a page - not a text-based PDF that merely has few
+  characters) and confirms the extracted text actually round-trips
+  through Tesseract, including a multi-page document, a corrupt/
+  truncated PDF, an empty file, one page's OCR call crashing without
+  sinking the rest of the document, and the `MAX_OCR_PAGES` cap.
+- `test_job_pipeline.py` - the full `_process_job` background task
+  against a mocked network boundary (`respx`, real extraction code
+  unmodified): the `PROCESSING` → `COMPLETED` callback sequence for a
+  real PDF; a download failure and a processing timeout both reported
+  `recoverable: true`; a corrupt PDF and an oversized file both
+  reported `recoverable: false`; and a deterministic (not timing-race)
+  proof that extraction is offloaded to a worker thread rather than
+  blocking the service's own event loop, via a thread that only
+  releases once a concurrently-scheduled coroutine has actually run.
+
+See TASK.md "Findings from Loop 07" for what these caught: `PROCESSING`
+was a dead enum value nothing ever set, and `extract_document` ran
+inline inside the async task, blocking the whole service for the
+duration of every extraction.
 
 ## Database - RLS/RBAC assertions against a real Postgres instance
 

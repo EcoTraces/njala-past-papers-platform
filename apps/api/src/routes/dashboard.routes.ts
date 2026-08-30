@@ -55,7 +55,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       request.db.from('examination_papers').select('id, title, status, created_at').in('status', ['SUBMITTED', 'UNDER_REVIEW']).order('created_at').limit(20),
       request.db.from('examination_papers').select('id, title, publication_date').eq('status', 'PUBLISHED').order('publication_date', { ascending: false }).limit(10),
       request.db.from('examination_papers').select('id, title, rejection_reason').eq('status', 'REJECTED').order('updated_at', { ascending: false }).limit(10),
-      request.db.from('document_processing_jobs').select('id, paper_id, status, error_message').eq('status', 'FAILED').order('created_at', { ascending: false }).limit(10),
+      request.db.from('document_processing_jobs').select('id, paper_id, status, error_message, attempts, examination_papers(title)').eq('status', 'FAILED').order('created_at', { ascending: false }).limit(10),
     ]);
 
     return {

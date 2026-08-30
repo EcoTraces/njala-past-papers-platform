@@ -100,6 +100,26 @@ describe('paper workflow / question bank / practice RBAC, end to end through the
     expect(res.statusCode).toBe(403);
   });
 
+  it('rejects a STUDENT manually retrying a failed processing job (POST /api/papers/:id/reprocess is LIBRARY_STAFF/ADMIN only)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/papers/11111111-1111-1111-1111-111111111111/reprocess',
+      headers: auth('student-token'),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('rejects a LECTURER manually retrying a failed processing job (reprocess is a library/admin action, not the uploader\'s)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/papers/11111111-1111-1111-1111-111111111111/reprocess',
+      headers: auth('lecturer1-token'),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('rejects a STUDENT creating a question (POST /api/questions is LECTURER/LIBRARY_STAFF/ADMIN only)', async () => {
     const res = await app.inject({
       method: 'POST',

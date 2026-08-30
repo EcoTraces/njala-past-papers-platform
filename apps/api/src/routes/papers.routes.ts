@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
 import { assertLecturerOwnsCourse, transitionPaperStatus } from '../services/papers.service.js';
 import { createSignedUrl, deletePaperFile, generateStorageKey, uploadPaperFile, validatePaperUpload } from '../services/storage.service.js';
-import { queueDocumentProcessing } from '../services/documentProcessing.service.js';
+import { queueDocumentProcessing, reprocessPaper } from '../services/documentProcessing.service.js';
 import { recordAuditEvent } from '../services/audit.service.js';
 import { notifyUser } from '../services/notifications.service.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js';
@@ -334,6 +334,13 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
       return updated;
     },
   );
+
+  app.post('/:id/reprocess', { preHandler: [authenticate, REVIEW_ROLES], schema: { tags: ['papers'], summary: 'Manually retry a paper stuck in a failed processing state' } }, async (request) => {
+    const { id } = request.params as { id: string };
+    const result = await reprocessPaper(id, request.user!.id);
+    await recordAuditEvent({ actorId: request.user!.id, action: 'paper.reprocess', entityType: 'examination_papers', entityId: id, request });
+    return result;
+  });
 
   app.post('/:id/submit', { preHandler: [authenticate, STAFF_UPLOAD_ROLES], schema: { tags: ['papers'] } }, async (request) => {
     const { id } = request.params as { id: string };

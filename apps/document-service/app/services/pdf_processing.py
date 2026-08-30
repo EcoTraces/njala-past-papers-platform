@@ -64,15 +64,21 @@ def extract_document(file_bytes: bytes) -> ExtractionResult:
 
 def _ocr_document(document: fitz.Document) -> str:
     pages_to_process = min(document.page_count, MAX_OCR_PAGES)
+    if document.page_count > MAX_OCR_PAGES:
+        logger.warning("ocr.page_count_capped", total_pages=document.page_count, processed_pages=MAX_OCR_PAGES)
     zoom = OCR_RENDER_DPI / 72
     matrix = fitz.Matrix(zoom, zoom)
 
     texts: list[str] = []
     for page_index in range(pages_to_process):
-        page = document.load_page(page_index)
-        pixmap = page.get_pixmap(matrix=matrix, colorspace=fitz.csRGB)
-        image = Image.open(BytesIO(pixmap.tobytes("png")))
-        page_text = pytesseract.image_to_string(image, lang=settings.ocr_language)
-        texts.append(page_text)
+        try:
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=matrix, colorspace=fitz.csRGB)
+            image = Image.open(BytesIO(pixmap.tobytes("png")))
+            page_text = pytesseract.image_to_string(image, lang=settings.ocr_language)
+            texts.append(page_text)
+        except Exception as exc:  # noqa: BLE001 - one bad page must not fail the whole document
+            logger.warning("ocr.page_failed", page_index=page_index, error=str(exc))
+            texts.append("")
 
     return "\n\n".join(texts).strip()

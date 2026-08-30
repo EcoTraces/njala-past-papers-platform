@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
@@ -29,16 +31,41 @@ async def create_job(job: JobRequest, background_tasks: BackgroundTasks) -> JobA
 
 async def _process_job(job: JobRequest) -> None:
     logger.info("job.started", job_id=job.job_id, paper_id=job.paper_id)
+    await send_callback(ProcessingCallback(job_id=job.job_id, paper_id=job.paper_id, status="PROCESSING"))
+
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(job.file_url)
-            response.raise_for_status()
-            file_bytes = response.content
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(job.file_url)
+                response.raise_for_status()
+                file_bytes = response.content
+        except httpx.HTTPError as exc:
+            # A network blip or an expired/unreachable signed URL - the
+            # bytes were never even inspected, so a retry against a
+            # freshly re-signed URL is worth trying.
+            raise _RecoverableJobError(f"Could not download the file to process: {exc}") from exc
 
         if len(file_bytes) > settings.max_upload_mb * 1024 * 1024:
+            # Not recoverable: re-fetching the exact same file produces
+            # the exact same size every time.
             raise UnprocessablePdfError(f"File exceeds {settings.max_upload_mb}MB limit")
 
-        result = extract_document(file_bytes)
+        try:
+            # extract_document is synchronous/CPU-bound (PyMuPDF page
+            # rendering, Tesseract OCR) - run it off the event loop so
+            # one job's extraction can't stall this service's health
+            # checks or its ability to accept/report on other jobs
+            # concurrently, and so the timeout below is actually
+            # enforceable (a plain blocking call can't be cancelled by
+            # asyncio.wait_for on its own).
+            result = await asyncio.wait_for(
+                asyncio.to_thread(extract_document, file_bytes),
+                timeout=settings.processing_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise _RecoverableJobError(
+                f"Processing timed out after {settings.processing_timeout_seconds}s"
+            ) from exc
 
         await send_callback(
             ProcessingCallback(
@@ -52,11 +79,41 @@ async def _process_job(job: JobRequest) -> None:
         )
         logger.info("job.completed", job_id=job.job_id, page_count=result.page_count, ocr_used=result.ocr_used)
 
-    except Exception as exc:  # noqa: BLE001 - any failure must still report back
-        logger.error("job.failed", job_id=job.job_id, error=str(exc))
+    except UnprocessablePdfError as exc:
+        # Corrupt/invalid/oversized - retrying the identical bytes
+        # changes nothing. Terminal until a human intervenes (a
+        # different file, a manual reprocess after a config change).
+        logger.error("job.failed.unprocessable", job_id=job.job_id, error=str(exc))
         await send_callback(
-            ProcessingCallback(job_id=job.job_id, paper_id=job.paper_id, status="FAILED", error_message=str(exc))
+            ProcessingCallback(
+                job_id=job.job_id, paper_id=job.paper_id, status="FAILED", error_message=str(exc), recoverable=False
+            )
         )
+    except _RecoverableJobError as exc:
+        logger.error("job.failed.recoverable", job_id=job.job_id, error=str(exc))
+        await send_callback(
+            ProcessingCallback(
+                job_id=job.job_id, paper_id=job.paper_id, status="FAILED", error_message=str(exc), recoverable=True
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - any other failure must still report back
+        # An unexpected/unclassified error (e.g. an OCR-engine crash) -
+        # treated as recoverable by default, since assuming the worst
+        # (permanently giving up) is a worse failure mode than one
+        # extra automatic retry for something that turns out not to be
+        # transient.
+        logger.error("job.failed.unexpected", job_id=job.job_id, error=str(exc))
+        await send_callback(
+            ProcessingCallback(
+                job_id=job.job_id, paper_id=job.paper_id, status="FAILED", error_message=str(exc), recoverable=True
+            )
+        )
+
+
+class _RecoverableJobError(Exception):
+    """Internal-only signal for a failure worth automatically retrying
+    (network/timeout) - never sent over the wire itself, only used to
+    pick the right `recoverable` flag on the FAILED callback."""
 
 
 @router.post("/sync-extract", dependencies=[Depends(verify_internal_secret)])

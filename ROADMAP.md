@@ -32,8 +32,14 @@ recorded in this repository's commit history - not just written.
   for subjective questions, role dashboards, admin user/role/academic-
   structure management, audit logging, rate limiting, OpenAPI docs.
 - Python FastAPI document-processing service: PyMuPDF text extraction
-  with an automatic Tesseract OCR fallback, async job handoff, shared-
-  secret-authenticated callback.
+  with an automatic Tesseract OCR fallback, async job handoff (a
+  genuine `QUEUED`→`PROCESSING`→`COMPLETED`/`FAILED` lifecycle,
+  extraction offloaded to a worker thread with a hard timeout so it
+  can't block the service's own event loop), shared-secret-
+  authenticated callback, and retry handling for recoverable failures
+  (both a dispatch-time retry-with-backoff and an automatic re-queue of
+  a bounded number of recoverable processing failures) - see "Findings
+  from Loop 07" in TASK.md.
 
 **Frontend**
 - All page categories from the brief exist and call the real API:
@@ -102,9 +108,12 @@ recorded in this repository's commit history - not just written.
 - No e2e coverage for flows that require a real account (login,
   upload, practice, review) - would need a seeded Supabase test
   project wired into CI.
-- No dedicated OCR-on-a-scanned-image test for the document service
-  (the extraction test uses a text-based PDF).
 - No load/performance testing.
+- No automatic recovery for a failed *callback* specifically (the
+  Python service finishes processing successfully, but the POST back
+  to Node fails) - only the job-dispatch and processing-failure retry
+  paths are covered (Loop 07); this one still needs a manual reprocess.
+  A real message queue would close this gap for free.
 
 ## Suggested next steps, in priority order
 

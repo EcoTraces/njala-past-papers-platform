@@ -245,3 +245,65 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   integration, +1 versioning RBAC HTTP-integration).
 - 18/18 RLS/RBAC scenarios passing against a freshly recreated
   Postgres instance.
+
+## [Unreleased] - Python document-processing pipeline: async, retries, real files (Loop 07)
+
+### Added
+
+- A genuine `PROCESSING` state: `apps/document-service` now reports it
+  the instant its background task actually starts work, distinct from
+  `QUEUED` (set the moment the job row is created). Previously a
+  dead enum value - jobs jumped straight from `QUEUED` to
+  `COMPLETED`/`FAILED`.
+- Retry handling for recoverable failures, end to end: `apps/document-
+  service` classifies every failure as `recoverable` (couldn't
+  download the file, timed out, an unexpected error) or not (a
+  corrupt/oversized file); `apps/api`'s job-dispatch step retries up to
+  3 times with backoff; its callback handler automatically re-queues a
+  recoverable `FAILED` report up to `MAX_AUTO_REPROCESS_ATTEMPTS = 2`
+  additional attempts before giving up.
+- `POST /api/papers/:id/reprocess` (LIBRARY_STAFF/ADMIN): a manual
+  retry action for a paper stuck in a failed processing state, wired to
+  a new "Retry" button on the library dashboard's processing-failures
+  list (which previously showed the error with no way to act on it,
+  and a raw paper UUID instead of its title).
+- A hard `processing_timeout_seconds` ceiling (120s default) around
+  extraction/OCR, enforced via `asyncio.wait_for` now that extraction
+  runs in a worker thread (`asyncio.to_thread`) rather than inline.
+- Per-page OCR resilience: one page's Tesseract call crashing no longer
+  fails the entire document's extraction.
+- Real-file test coverage: genuinely scanned/image-only PDFs (PIL-
+  rendered text with no text layer, not just a low-character-count
+  text PDF) driven through the actual OCR path, a real corrupt PDF, an
+  oversized file, and a job-pipeline integration suite
+  (`test_job_pipeline.py`, 6 tests) covering the PROCESSING callback
+  sequence, recoverable/non-recoverable classification, the timeout,
+  and a deterministic (non-timing-race) proof that extraction doesn't
+  block the service's event loop.
+- Node-side test coverage that didn't exist before this loop:
+  `documentProcessing.service.test.ts` (8 tests, against a small
+  in-memory fake of the two tables it touches) and
+  `internal.callback.test.ts` (7 tests, HTTP-level via `app.inject()`).
+
+### Fixed
+
+- `extract_document` (PyMuPDF + Tesseract, both synchronous/CPU-bound)
+  ran inline inside the async background task, blocking
+  `apps/document-service`'s own event loop for the full duration of
+  every extraction - a second job or even a health check had to wait
+  behind whatever the first one was doing. Now runs via
+  `asyncio.to_thread`.
+- A dispatch failure (Node couldn't reach the Python service) left the
+  job silently stuck at `QUEUED` forever - the original code was
+  fire-and-forget with no DB write on failure at all, so it never
+  reached `FAILED` and never appeared on the library dashboard's
+  "processing failures" list. Fixed as part of the retry work above.
+
+### Verified
+
+- `npm run build`/`typecheck`/`lint`/`test` all clean; 107 tests
+  passing (up from 90: +16 document-service pytest, +8
+  documentProcessing.service unit, +7 internal-callback
+  HTTP-integration, +1 reprocess-endpoint RBAC).
+- `apps/document-service`: 16/16 pytest passing, `ruff check` clean.
+- 18/18 RLS/RBAC scenarios and 8/8 Playwright e2e still passing.

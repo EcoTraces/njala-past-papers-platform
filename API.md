@@ -58,6 +58,7 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 | POST | `/:id/publish` | ✓ (LIBRARY_STAFF/ADMIN) | `APPROVED` → `PUBLISHED` |
 | POST | `/:id/reject` | ✓ (LIBRARY_STAFF/ADMIN) | Requires `{ reason }`; → `REJECTED` |
 | POST | `/:id/archive` | ✓ (LIBRARY_STAFF/ADMIN) | `PUBLISHED` → `ARCHIVED` |
+| POST | `/:id/reprocess` | ✓ (LIBRARY_STAFF/ADMIN) | Manually retries a stuck/failed OCR job - reuses and re-dispatches the paper's most recent `document_processing_jobs` row (incrementing `attempts`) rather than creating a parallel one |
 | DELETE | `/:id` | ✓ (ADMIN/SUPER_ADMIN) | Soft delete |
 | GET | `/:id/download-url` | ✓ | Mints a short-lived signed URL; records a download |
 | POST/DELETE | `/:id/bookmark` | ✓ | Toggle bookmark |

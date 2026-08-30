@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
 import { PageSpinner } from '../../components/Spinner';
@@ -8,13 +8,25 @@ interface LibraryDashboardResponse {
   pendingReview: Array<{ id: string; title: string; status: string }>;
   recentlyApproved: Array<{ id: string; title: string }>;
   recentlyRejected: Array<{ id: string; title: string; rejection_reason: string | null }>;
-  processingFailures: Array<{ id: string; paper_id: string; error_message: string | null }>;
+  processingFailures: Array<{
+    id: string;
+    paper_id: string;
+    error_message: string | null;
+    attempts: number;
+    examination_papers: { title: string } | null;
+  }>;
 }
 
 export function LibraryDashboard(): JSX.Element {
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['library-dashboard'],
     queryFn: () => api.get<LibraryDashboardResponse>('/library/dashboard'),
+  });
+
+  const retryProcessing = useMutation({
+    mutationFn: (paperId: string) => api.post(`/papers/${paperId}/reprocess`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['library-dashboard'] }),
   });
 
   if (isLoading || !data) return <PageSpinner />;
@@ -71,8 +83,24 @@ export function LibraryDashboard(): JSX.Element {
       {data.processingFailures.length > 0 && (
         <section>
           <h2 className="mb-3 text-lg font-medium text-red-700">Processing failures</h2>
-          <ul className="space-y-1 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            {data.processingFailures.map((j) => <li key={j.id}>Paper {j.paper_id}: {j.error_message}</li>)}
+          <ul className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            {data.processingFailures.map((j) => (
+              <li key={j.id} className="flex items-center justify-between gap-3">
+                <span>
+                  <Link to={`/app/papers/${j.paper_id}`} className="font-medium hover:underline">{j.examination_papers?.title ?? 'Untitled paper'}</Link>
+                  : {j.error_message}
+                  {j.attempts > 0 && <span className="text-red-600"> (retried {j.attempts}x)</span>}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0 whitespace-nowrap"
+                  disabled={retryProcessing.isPending && retryProcessing.variables === j.paper_id}
+                  onClick={() => retryProcessing.mutate(j.paper_id)}
+                >
+                  {retryProcessing.isPending && retryProcessing.variables === j.paper_id ? 'Retrying…' : 'Retry'}
+                </button>
+              </li>
+            ))}
           </ul>
         </section>
       )}
