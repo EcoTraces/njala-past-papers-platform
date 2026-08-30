@@ -54,6 +54,31 @@ these tests makes a network call. Covers:
   clear message before ever attempting a Supabase sign-in. Mocks the
   Supabase boundary (`../lib/supabase.js`) with a small fake query
   builder rather than hitting a real project.
+- `app.rbac.test.ts` - **HTTP-level integration tests**, the only tests
+  in this project that call `buildApp()` and drive it with real
+  `app.inject()` requests instead of unit-testing a middleware function
+  against a hand-built fake `request`. 15 scenarios matching the brief
+  exactly: a student hitting an admin endpoint, a student modifying
+  another user's status, a lecturer creating/modifying a course they
+  have no authority over, library staff hitting admin-only settings and
+  admin-only staff provisioning, role escalation via `POST
+  /admin/staff` and via manipulated `role` parameters in `POST`/`DELETE
+  /admin/users/:id/roles`, a missing token, a forged token, and the
+  positive control (a genuine SUPER_ADMIN passes the exact check a
+  plain ADMIN was rejected by). Mocks only what `authenticate()` needs
+  (`supabaseAdmin.auth.getUser` + the `profiles`/`user_roles` lookups);
+  every scenario is rejected before the handler would ever touch
+  `request.db`, and a Proxy-based stub throws loudly if that assumption
+  is ever wrong, turning a silently-passing bad test into a hard
+  failure instead. This file is what caught two real bugs the day it
+  was written - see "Findings from Loop 03" in TASK.md: the app
+  couldn't boot at all (`@fastify/helmet@12` requires Fastify 5, this
+  project runs Fastify 4), and the centralized error handler was
+  masking legitimate `4xx` errors from Fastify/its plugins as generic
+  `500`s.
+- `auth.rate-limit.test.ts` - drives `/api/auth/login` past its
+  per-route budget (10/minute) and asserts a real `429` with a proper
+  error body comes back, not a masked `500`.
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are

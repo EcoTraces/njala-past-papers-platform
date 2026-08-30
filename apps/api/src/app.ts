@@ -78,6 +78,23 @@ export async function buildApp(): Promise<FastifyInstance> {
       return;
     }
 
+    // Fastify itself and its plugins (rate-limit's 429, the body
+    // parser's 400/413, etc) throw errors carrying a legitimate
+    // client-error statusCode - without this branch every one of
+    // those was falling through to a masked 500 below, silently
+    // turning "you're being rate limited" into "internal server
+    // error" for the caller. Only trust the 4xx range here: a
+    // misbehaving 5xx from an unrecognized source still gets the
+    // generic masked message, since unlike a 4xx it might be leaking
+    // something about an actual bug/internal state.
+    if (typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500) {
+      request.log.warn({ err: error, code: error.code }, 'Handled framework/plugin error');
+      reply.status(error.statusCode).send({
+        error: { code: error.code ?? 'REQUEST_ERROR', message: error.message },
+      });
+      return;
+    }
+
     request.log.error({ err: error }, 'Unhandled error');
     reply.status(500).send({
       error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' },

@@ -76,3 +76,58 @@ prior summaries, found and fixed:
   format validation/normalization).
 - Removed an empty, unused `tests/` directory tree left over from
   initial scaffolding.
+
+## [Unreleased] - Database/RLS hardening (Loop 02)
+
+### Added
+
+- Expanded `supabase/tests/rls_rbac_assertions.sql` from 11 to 15
+  scenarios: direct `storage.objects` access under different roles
+  (mirrors `examination_papers` visibility; no role can write to it
+  directly - uploads are service-role-only), a lecturer unable to
+  self-assign `course_lecturers` ownership, and a lecturer unable to
+  reassign a paper's `uploaded_by` via `UPDATE` (mass-assignment/
+  IDOR-via-update).
+
+### Fixed
+
+- `scripts/db-test-setup.sh` never granted `anon`/`authenticated`
+  table-level privileges on `storage.objects`/`storage.buckets` (only
+  on `public`-schema tables), so the new storage test failed with
+  `permission denied for table objects` until fixed - the stub now
+  mirrors Supabase's real default grants on the `storage` schema too.
+
+## [Unreleased] - Auth/RBAC hardening via direct API attack tests (Loop 03)
+
+Added the first HTTP-level integration tests in this project's
+history - `app.rbac.test.ts` calls `buildApp()` and drives it with real
+`app.inject()` requests, rather than unit-testing middleware functions
+against hand-built fake `request` objects. This immediately surfaced
+two real bugs that 50 passing unit tests had never caught, because
+nothing had ever actually constructed the app before.
+
+### Fixed
+
+- **The app could not start.** `@fastify/helmet@12.0.1` (resolved by
+  `npm install` for the `^12.0.1` range) requires Fastify 5.x; this
+  project runs Fastify 4.29.1, and every other `@fastify/*` plugin here
+  is already Fastify-4-compatible. Pinned to `^11.1.1`.
+- **The centralized error handler masked legitimate `4xx` errors from
+  Fastify/its plugins as generic `500`s** - concretely, a client
+  correctly hitting the new stricter auth rate limit (see below) got
+  `500 Internal Server Error` instead of `429 Too Many Requests`,
+  indistinguishable from a real server bug. Fixed to pass through any
+  error already carrying a legitimate `4xx` status; unrecognized `5xx`
+  errors still get the generic masked message.
+
+### Added
+
+- A stricter, dedicated rate limit on `/api/auth/login`/`staff-login`
+  (10/minute) and `/signup`/`password-reset/request` (5/minute), on
+  top of the existing API-wide limit.
+- `app.rbac.test.ts` (15 scenarios) and `auth.rate-limit.test.ts` (1
+  scenario, but the one that caught the error-handler bug above).
+- `'silent'` added to the `LOG_LEVEL` enum, used to keep the real
+  Fastify app's request logging out of test output.
+
+See TASK.md ("Findings from Loop 03") for the full writeup.

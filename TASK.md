@@ -52,6 +52,61 @@ all pass — see "Verification" at the bottom):
    `apps/web/e2e/`, and `supabase/tests/`). Never tracked by git (empty
    dirs aren't), so no commit needed for the removal itself.
 
+## Findings from Loop 03 (auth/RBAC hardening via direct API attack tests)
+
+Writing `app.rbac.test.ts` - the first thing in this project's history
+to actually call `buildApp()` and send it real HTTP requests via
+`app.inject()`, rather than unit-testing middleware functions against
+hand-built fake `request` objects - immediately surfaced two real bugs
+that no prior test (50 passing unit tests at the time) had caught:
+
+1. **`[BROKEN]` → fixed: the app could not start at all.**
+   `@fastify/helmet@12.0.1` (which `npm install` resolved for the
+   `^12.0.1` range in `package.json`) requires Fastify 5.x; this
+   project runs Fastify 4.29.1. Registering it threw
+   `FastifyError: fastify-plugin: @fastify/helmet - expected '5.x'
+   fastify version, '4.29.1' is installed` on every single boot. Fixed
+   by pinning to `^11.1.1` (the last Fastify-4-compatible major; every
+   other `@fastify/*` plugin in this project is already on a
+   Fastify-4-compatible version). This would have failed in `npm run
+   dev`, in the Docker container, and in every CI job that runs the
+   API - it simply hadn't been exercised yet.
+2. **`[SECURITY ISSUE]`/`[BROKEN]` → fixed: the centralized error
+   handler silently turned legitimate 4xx responses from Fastify/its
+   plugins into masked 500s.** `app.ts`'s `setErrorHandler` only
+   special-cased `AppError` instances and Zod validation errors;
+   anything else - including `@fastify/rate-limit`'s own `429` error -
+   fell through to a generic `reply.status(500)`. Concretely: the new
+   stricter rate limit on `/api/auth/login` (see below) was
+   *correctly* tripping (confirmed via `x-ratelimit-remaining`
+   headers), but the client received `500 Internal Server Error`
+   instead of `429 Too Many Requests` - indistinguishable from a real
+   server bug, and not retriable the way a well-behaved client would
+   handle a real `429`. Fixed: the handler now passes through any
+   error whose `statusCode` is in the `4xx` range with its real status
+   and message (a `5xx` from an unrecognized source still gets the
+   generic masked message, since a `5xx` might be leaking internal
+   state a `4xx` wouldn't). Caught and verified by
+   `auth.rate-limit.test.ts`, which drives a route past its limit and
+   asserts the real `429` comes through.
+3. **`[MISSING]` → added: a stricter, dedicated rate limit on the
+   auth-brute-force-sensitive endpoints** (`/api/auth/login`,
+   `/staff-login`: 10/min; `/signup`, `/password-reset/request`:
+   5/min), layered under the existing API-wide limit, per-route via
+   `@fastify/rate-limit`'s `config.rateLimit` option.
+4. **`[MISSING]` → added: 15 HTTP-level RBAC integration tests**
+   (`app.rbac.test.ts`) covering every scenario named in the brief:
+   student → admin endpoint, student → another user's data, lecturer →
+   unauthorized course modification (create *and* update), library
+   staff → admin-only settings and admin-only account provisioning,
+   role escalation via `POST /admin/staff` and via
+   `POST/DELETE /admin/users/:id/roles` (manipulated request
+   parameters - `role: 'SUPER_ADMIN'` in the body), a request with no
+   token, and a forged/unrecognized token. Also asserts the inverse: a
+   genuine SUPER_ADMIN passes the exact check a plain ADMIN was
+   rejected by, proving the check is role-specific rather than an
+   accidental blanket lockout.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -92,9 +147,9 @@ from a clean checkout.
 | Admin (users/staff provisioning/status/roles/audit logs/system settings) | `[COMPLETE]` | |
 | Internal processing callback | `[COMPLETE]` | Shared-secret guarded, not a Fastify-auth route by design |
 | OpenAPI/Swagger | `[COMPLETE]` | Served at `/api/docs`, generated from route schemas |
-| Rate limiting | `[PARTIAL]` | Global limiter only (`RATE_LIMIT_MAX`/`WINDOW`); no *stricter* dedicated limit on `/api/auth/login`/`/staff-login`/`/signup` - see Loop 03 |
+| Rate limiting | `[COMPLETE]` | Global limiter plus a stricter per-route budget on `/api/auth/login`\|`/staff-login` (10/min), `/signup` and `/password-reset/request` (5/min); verified with a test that actually exceeds the budget and asserts a real `429` |
 | Structured logging, security headers, CORS allow-list | `[COMPLETE]` | |
-| HTTP-level integration tests (hitting the real Fastify app, not just unit-testing middleware functions) | `[MISSING]` | Existing tests are pure unit tests with hand-built fake `request` objects; nothing uses `app.inject()` against the real route pipeline yet - see Loop 03 |
+| HTTP-level integration tests (hitting the real Fastify app, not just unit-testing middleware functions) | `[COMPLETE]` | `app.rbac.test.ts` boots the real app via `buildApp()` and hits it with `app.inject()`; this is what caught two real bugs (see below) that every prior unit test missed because nothing had ever actually constructed the app before |
 
 ## Database & Supabase — `supabase/`
 
@@ -126,7 +181,7 @@ from a clean checkout.
 | Suite | Status | Count |
 |---|---|---|
 | `packages/shared` unit | `[COMPLETE]` | 19 |
-| `apps/api` unit | `[COMPLETE]` | 29 (was 27; +2 from the activation-gate regression test) |
+| `apps/api` unit + integration | `[COMPLETE]` | 45 (27 original + 2 activation-gate + 15 RBAC HTTP-integration + 1 rate-limit) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 6, public-routes-only; no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 4 |
@@ -138,7 +193,7 @@ from a clean checkout.
 2. ~~Fix build output hygiene (test files in dist)~~ **done this pass**
 3. ~~Remove duplicate login validation schemas~~ **done this pass**
 4. ~~Loop 02: add a direct `storage.objects` RLS test; add course-lecturer-ownership and manipulated-parameter scenarios to the assertion suite.~~ **done**
-5. Loop 03: add `app.inject()`-based HTTP integration tests proving the exact attack scenarios listed in the brief; add a stricter rate limit on `/api/auth/*`.
+5. ~~Loop 03: add `app.inject()`-based HTTP integration tests proving the exact attack scenarios listed in the brief; add a stricter rate limit on `/api/auth/*`.~~ **done - also found and fixed two real bugs (app couldn't boot; 429s were masked as 500s) that only surfaced once something finally booted the real app**
 6. Loop 04: confirm (already largely true per the table above) every module is real; no action expected beyond documentation touch-ups.
 7. Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; consider route-based code splitting for the JS bundle.
 8. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment.
@@ -149,7 +204,7 @@ from a clean checkout.
 npm run build            # shared → api → web, all clean, test files excluded from all three dist/ outputs
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
-npm run test               # shared 19, api 29, web 2 - all passing
+npm run test               # shared 19, api 45, web 2 - all passing (66 total)
 bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 15/15 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 6/6 e2e passing
 ```

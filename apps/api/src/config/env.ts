@@ -26,7 +26,7 @@ const envSchema = z.object({
   DOCUMENT_SERVICE_URL: z.string().url().default('http://localhost:8000'),
   DOCUMENT_SERVICE_CALLBACK_SECRET: z.string().min(8),
 
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 
 const parsed = envSchema.safeParse(process.env);

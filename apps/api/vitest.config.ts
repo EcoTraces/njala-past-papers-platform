@@ -10,6 +10,10 @@ export default defineConfig({
       SUPABASE_ANON_KEY: 'test-anon-key',
       SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
       DOCUMENT_SERVICE_CALLBACK_SECRET: 'test-shared-secret-value',
+      // app.rbac.test.ts boots the real Fastify app; keep its request
+      // logging out of test output (the tests assert on status codes/
+      // bodies, not log lines).
+      LOG_LEVEL: 'silent',
     },
   },
 });

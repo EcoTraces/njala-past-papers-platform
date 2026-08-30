@@ -128,7 +128,15 @@ is exposed.
 
 - `@fastify/rate-limit`: configurable max requests per window
   (`RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS`), applied globally including
-  the internal callback endpoint.
+  the internal callback endpoint. The credential-stuffing/enumeration-
+  sensitive endpoints get a tighter per-route budget on top of that:
+  `/api/auth/login` and `/staff-login` (10/minute), `/signup` and
+  `/password-reset/request` (5/minute) - see `LOGIN_RATE_LIMIT`/
+  `SIGNUP_RATE_LIMIT`/`PASSWORD_RESET_RATE_LIMIT` in
+  `apps/api/src/routes/auth.routes.ts`. Verified with a test that
+  actually drives a route past its limit and asserts a real `429`
+  comes back (`apps/api/src/auth.rate-limit.test.ts`) - which is what
+  caught the error-handler bug described below.
 - `@fastify/helmet` with a restrictive CSP (`default-src 'self'`) and
   `crossOriginResourcePolicy: same-site`.
 - CORS is allow-listed (`CORS_ALLOWED_ORIGINS`), not wildcarded.
@@ -143,6 +151,17 @@ is exposed.
   LIBRARY_STAFF/ADMIN/SUPER_ADMIN only; there is no client INSERT
   policy on `audit_logs` at all - only the service-role client writes
   it.
+- **Error responses preserve real HTTP status codes from Fastify/its
+  plugins.** The centralized error handler (`app.ts`) previously only
+  recognized its own `AppError` subclasses and Zod validation errors;
+  anything else - including `@fastify/rate-limit`'s own `429` - fell
+  through to a generic masked `500`. A client hitting a rate limit
+  therefore couldn't distinguish "you're being throttled, back off and
+  retry" from "the server is broken", which matters for a client
+  trying to behave well. Fixed to pass through any error already
+  carrying a legitimate `4xx` status; a `5xx` from an unrecognized
+  source still gets the generic masked message. Found and fixed while
+  writing `auth.rate-limit.test.ts` (see TASK.md, Loop 03).
 
 ## Internal service-to-service trust
 
