@@ -82,8 +82,8 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 | POST | `/sessions` | ✓ | `{ courseId? , sourcePaperId?, questionCount, questionTypes?, difficulty? }` - picks a random set of VERIFIED questions |
 | GET | `/sessions/:id` | ✓ | Session + snapshotted questions (no answer keys) + saved answers |
 | POST | `/sessions/:id/answers` | ✓ | Upsert one answer; objective types are marked instantly by a DB trigger |
-| POST | `/sessions/:id/pause` / `/resume` | ✓ | |
-| POST | `/sessions/:id/submit` | ✓ | Calls the `practice_submit_session` RPC; recomputes totals |
+| POST | `/sessions/:id/pause` / `/resume` | ✓ | Calls `practice_pause_session`/`practice_resume_session` (RPCs); accumulates `time_spent_seconds` across cycles rather than a plain status flip |
+| POST | `/sessions/:id/submit` | ✓ | Calls the `practice_submit_session` RPC; recomputes totals (scoped to the session's actual `practice_session_questions` snapshot only) and finalizes `time_spent_seconds`. Idempotent - resubmitting an already-`SUBMITTED` session is a safe no-op |
 | POST | `/answers/:answerId/mark` | ✓ (LECTURER/LIBRARY_STAFF/ADMIN) | Manual marking for ESSAY/SHORT_ANSWER answers |
 
 ## Dashboards & analytics (`/api`)

@@ -84,13 +84,33 @@ insert into examination_papers (
 
 insert into questions (id, course_id, question_text, question_type, marks, author_id, verification_status) values
   ('b1000000-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444401', 'Compute 6 * 7', 'NUMERICAL', 5,
+   '20000000-0000-0000-0000-000000000001', 'VERIFIED'),
+  ('b1000000-0000-0000-0000-000000000002', '44444444-4444-4444-4444-444444444401', 'Which is prime?', 'MULTIPLE_CHOICE', 5,
+   '20000000-0000-0000-0000-000000000001', 'VERIFIED'),
+  ('b1000000-0000-0000-0000-000000000003', '44444444-4444-4444-4444-444444444401', 'Explain recursion.', 'ESSAY', 20,
+   '20000000-0000-0000-0000-000000000001', 'VERIFIED'),
+  -- Deliberately NOT part of any practice_session_questions snapshot
+  -- below - used by scenario 22 to prove a student can't answer a
+  -- question outside their session's snapshot and have it count.
+  ('b1000000-0000-0000-0000-000000000004', '44444444-4444-4444-4444-444444444401', 'Outside the snapshot', 'MULTIPLE_CHOICE', 50,
    '20000000-0000-0000-0000-000000000001', 'VERIFIED');
 insert into answer_keys (question_id, correct_answer_text, created_by) values
   ('b1000000-0000-0000-0000-000000000001', '42', '20000000-0000-0000-0000-000000000001');
+insert into question_options (id, question_id, option_label, option_text, is_correct, order_index) values
+  ('b2000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000002', 'A', '4', false, 0),
+  ('b2000000-0000-0000-0000-000000000002', 'b1000000-0000-0000-0000-000000000002', 'B', '7', true, 1),
+  ('b2000000-0000-0000-0000-000000000003', 'b1000000-0000-0000-0000-000000000004', 'A', 'right', true, 0);
 
 insert into practice_sessions (id, user_id, course_id, total_questions, total_marks) values
-  ('c1000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444401', 0, 0),
+  ('c1000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444401', 3, 30),
   ('c1000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', '44444444-4444-4444-4444-444444444401', 0, 0);
+-- Student1's session snapshot: the NUMERICAL, MULTIPLE_CHOICE, and
+-- ESSAY questions above - deliberately NOT the "outside the snapshot"
+-- one.
+insert into practice_session_questions (session_id, question_id, order_index) values
+  ('c1000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000001', 0),
+  ('c1000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000002', 1),
+  ('c1000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000003', 2);
 
 insert into audit_logs (actor_id, action, entity_type) values
   ('40000000-0000-0000-0000-000000000001', 'test.fixture', 'examination_papers');
@@ -725,6 +745,278 @@ begin
     raise exception 'FAIL: the paper''s own uploader/course lecturer should still see their DRAFT paper via the search RPC, saw %', visible_count;
   end if;
   raise notice 'PASS: the search RPC still surfaces a DRAFT paper to its own uploader (RLS allows it, not blanket-denied)';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 21 (Loop 09): a student cannot self-assign their own
+-- practice_answers.marks_awarded/is_correct - the only way to set them
+-- is the auto-marking trigger (recomputing from the actual submitted
+-- answer) or a genuine staff manual mark. Also proves a LECTURER
+-- taking their own practice session still gets auto-graded normally,
+-- not mistaken for a staff manual mark just because of their role.
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+insert into practice_answers (session_id, question_id, selected_option_id) values
+  ('c1000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000002', 'b2000000-0000-0000-0000-000000000001'); -- wrong option
+
+do $$
+declare v_correct boolean; v_marks numeric;
+begin
+  select is_correct, marks_awarded into v_correct, v_marks from practice_answers
+    where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000002';
+  if v_correct is not false or v_marks is distinct from 0 then
+    raise exception 'FAIL: a wrong MC answer should auto-grade as incorrect/0 marks, got correct=%, marks=%', v_correct, v_marks;
+  end if;
+  raise notice 'PASS: a wrong MULTIPLE_CHOICE answer auto-grades as incorrect (baseline for the attack below)';
+end;
+$$;
+
+-- ATTACK: a raw UPDATE that touches ONLY the grading columns, never
+-- selected_option_id/answer_text/numerical_answer - exactly the
+-- vector the Node API's own route never performs but RLS/the trigger
+-- alone must still stop, since a real client could call PostgREST
+-- directly with the same access token.
+update practice_answers set marks_awarded = 5, is_correct = true, marked_by = '30000000-0000-0000-0000-000000000001'
+  where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000002';
+
+do $$
+declare v_correct boolean; v_marks numeric; v_marked_by uuid;
+begin
+  select is_correct, marks_awarded, marked_by into v_correct, v_marks, v_marked_by from practice_answers
+    where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000002';
+  if v_correct is not false or v_marks is distinct from 0 or v_marked_by is not null then
+    raise exception 'FAIL: student self-marking attack succeeded - correct=%, marks=%, marked_by=%', v_correct, v_marks, v_marked_by;
+  end if;
+  raise notice 'PASS: a student cannot self-assign marks_awarded/is_correct/marked_by via a raw UPDATE that skips the content columns';
+end;
+$$;
+
+insert into practice_answers (session_id, question_id, answer_text) values
+  ('c1000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000003', 'Recursion is when a function calls itself.');
+
+update practice_answers set marks_awarded = 20, is_correct = true
+  where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000003';
+
+do $$
+declare v_marks numeric;
+begin
+  select marks_awarded into v_marks from practice_answers
+    where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000003';
+  if v_marks is not null then
+    raise exception 'FAIL: student self-marked their own ESSAY answer, got marks=%', v_marks;
+  end if;
+  raise notice 'PASS: a student cannot self-assign marks on their own ESSAY answer either';
+end;
+$$;
+
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', false);
+
+update practice_answers set marks_awarded = 18, is_correct = true, auto_marked = false,
+  marked_by = '30000000-0000-0000-0000-000000000001', marked_at = now()
+  where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000003';
+
+do $$
+declare v_marks numeric; v_marked_by uuid;
+begin
+  select marks_awarded, marked_by into v_marks, v_marked_by from practice_answers
+    where session_id = 'c1000000-0000-0000-0000-000000000001' and question_id = 'b1000000-0000-0000-0000-000000000003';
+  if v_marks is distinct from 18 or v_marked_by is distinct from '30000000-0000-0000-0000-000000000001'::uuid then
+    raise exception 'FAIL: a legitimate staff manual mark did not take effect - marks=%, marked_by=%', v_marks, v_marked_by;
+  end if;
+  raise notice 'PASS: a legitimate staff manual mark on an ESSAY answer still works correctly';
+end;
+$$;
+
+reset role;
+
+insert into practice_sessions (id, user_id, course_id, total_questions, total_marks) values
+  ('c1000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444401', 1, 5);
+insert into practice_session_questions (session_id, question_id, order_index) values
+  ('c1000000-0000-0000-0000-000000000003', 'b1000000-0000-0000-0000-000000000002', 0);
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', false);
+
+insert into practice_answers (session_id, question_id, selected_option_id) values
+  ('c1000000-0000-0000-0000-000000000003', 'b1000000-0000-0000-0000-000000000002', 'b2000000-0000-0000-0000-000000000002'); -- correct option
+
+do $$
+declare v_correct boolean; v_marks numeric; v_auto boolean;
+begin
+  select is_correct, marks_awarded, auto_marked into v_correct, v_marks, v_auto from practice_answers
+    where session_id = 'c1000000-0000-0000-0000-000000000003' and question_id = 'b1000000-0000-0000-0000-000000000002';
+  if v_correct is not true or v_marks is distinct from 5 or v_auto is not true then
+    raise exception 'FAIL: a LECTURER taking their own practice session should still auto-grade normally, got correct=%, marks=%, auto=%', v_correct, v_marks, v_auto;
+  end if;
+  raise notice 'PASS: a LECTURER submitting their own practice answer still gets auto-graded normally (not mistaken for a staff manual mark)';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 22 (Loop 09): a student cannot answer (and have counted) a
+-- question that was never part of their practice session's snapshot -
+-- an "outside the snapshot" question worth 50 marks must not be
+-- insertable against a session that never included it, and the
+-- session's own total/obtained marks must reflect only its real
+-- snapshot on submission.
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+do $$
+begin
+  begin
+    insert into practice_answers (session_id, question_id, selected_option_id) values
+      ('c1000000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000004', 'b2000000-0000-0000-0000-000000000003');
+    raise exception 'FAIL: inserted an answer for a question outside the session''s practice_session_questions snapshot';
+  exception when insufficient_privilege then
+    raise notice 'PASS: cannot insert a practice_answers row for a question outside the session''s own snapshot';
+  end;
+end;
+$$;
+
+do $$
+declare v_result practice_sessions;
+begin
+  -- By this point in the fixture timeline (scenario 21 above), this
+  -- session's 3-question/30-mark snapshot has: the MC question
+  -- answered wrong (0 marks), the ESSAY question staff-marked at 18,
+  -- and the NUMERICAL question left unanswered - 18/30 total,
+  -- regardless of the blocked 50-mark out-of-scope insert attempt.
+  select * into v_result from practice_submit_session('c1000000-0000-0000-0000-000000000001');
+  if v_result.total_marks is distinct from 30 or v_result.obtained_marks is distinct from 18 or v_result.percentage is distinct from 60.00 then
+    raise exception 'FAIL: session totals should reflect only the real 3-question/30-mark snapshot, got total=%, obtained=%, pct=%',
+      v_result.total_marks, v_result.obtained_marks, v_result.percentage;
+  end if;
+  raise notice 'PASS: session totals on submit reflect only the real snapshot, not any out-of-scope answer';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 23 (Loop 09): a staff member CAN actually manually mark
+-- another student's subjective practice answer via the RLS-scoped
+-- client, and time_spent_seconds genuinely accumulates across pause/
+-- resume/submit instead of silently staying at its default 0 forever.
+-- Both were previously-undiscovered functional bugs, not just missing
+-- coverage - practice_answers had no SELECT policy for staff at all
+-- (Postgres requires SELECT-visibility before an UPDATE/DELETE policy
+-- is even considered), so every staff manual-mark attempt silently
+-- affected 0 rows; and nothing ever wrote to time_spent_seconds.
+-- ---------------------------------------------------------------------
+insert into practice_sessions (id, user_id, course_id, total_questions, total_marks) values
+  ('c1000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000002', '44444444-4444-4444-4444-444444444401', 1, 20);
+insert into practice_session_questions (session_id, question_id, order_index) values
+  ('c1000000-0000-0000-0000-000000000004', 'b1000000-0000-0000-0000-000000000003', 0);
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000002', false);
+insert into practice_answers (session_id, question_id, answer_text) values
+  ('c1000000-0000-0000-0000-000000000004', 'b1000000-0000-0000-0000-000000000003', 'A second student''s essay answer.');
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare v_visible int;
+begin
+  select count(*) into v_visible from practice_answers where session_id = 'c1000000-0000-0000-0000-000000000004';
+  if v_visible <> 1 then
+    raise exception 'FAIL: library staff should be able to SELECT another student''s practice_answers row (a prerequisite for marking it), saw %', v_visible;
+  end if;
+  raise notice 'PASS: library staff can see a practice_answers row that isn''t their own (prerequisite for marking it)';
+end;
+$$;
+
+do $$
+declare v_marks numeric;
+begin
+  update practice_answers set marks_awarded = 15, is_correct = true, auto_marked = false,
+    marked_by = '30000000-0000-0000-0000-000000000001', marked_at = now()
+    where session_id = 'c1000000-0000-0000-0000-000000000004' and question_id = 'b1000000-0000-0000-0000-000000000003';
+  select marks_awarded into v_marks from practice_answers
+    where session_id = 'c1000000-0000-0000-0000-000000000004' and question_id = 'b1000000-0000-0000-0000-000000000003';
+  if v_marks is distinct from 15 then
+    raise exception 'FAIL: library staff should be able to manually mark another student''s ESSAY answer, got marks=% (previously this silently affected 0 rows)', v_marks;
+  end if;
+  raise notice 'PASS: library staff can manually mark another student''s ESSAY answer end to end';
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 24 (Loop 09): time_spent_seconds genuinely accumulates
+-- across pause -> resume -> submit rather than staying at 0.
+-- ---------------------------------------------------------------------
+insert into practice_sessions (id, user_id, course_id, total_questions, total_marks, started_at) values
+  ('c1000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444401', 1, 5, now() - interval '5 seconds');
+insert into practice_session_questions (session_id, question_id, order_index) values
+  ('c1000000-0000-0000-0000-000000000005', 'b1000000-0000-0000-0000-000000000001', 0);
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+select practice_pause_session('c1000000-0000-0000-0000-000000000005');
+
+do $$
+declare v_time int; v_status text;
+begin
+  select time_spent_seconds, status into v_time, v_status from practice_sessions where id = 'c1000000-0000-0000-0000-000000000005';
+  if v_status <> 'PAUSED' or v_time < 4 then
+    raise exception 'FAIL: pausing should accumulate the elapsed active segment (~5s) and flip to PAUSED, got status=%, time=%', v_status, v_time;
+  end if;
+  raise notice 'PASS: pausing a practice session accumulates real elapsed time (was previously always 0)';
+end;
+$$;
+
+select practice_resume_session('c1000000-0000-0000-0000-000000000005');
+insert into practice_answers (session_id, question_id, numerical_answer) values
+  ('c1000000-0000-0000-0000-000000000005', 'b1000000-0000-0000-0000-000000000001', 42);
+
+do $$
+declare v_result practice_sessions;
+begin
+  select * into v_result from practice_submit_session('c1000000-0000-0000-0000-000000000005');
+  if v_result.time_spent_seconds < 4 then
+    raise exception 'FAIL: submit should add the final active segment on top of the pause accumulation, got time=%', v_result.time_spent_seconds;
+  end if;
+  raise notice 'PASS: submit finalizes time_spent_seconds to a real, non-zero total (%s)', v_result.time_spent_seconds;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
+-- Scenario 25 (Loop 09): duplicate submission - calling submit again
+-- on an already-SUBMITTED session must be a safe no-op (same result
+-- returned, nothing double-counted or re-scored), not an error and
+-- not a second scoring pass - a student double-clicking "submit" or
+-- retrying after a flaky network response must never get two
+-- different results.
+-- ---------------------------------------------------------------------
+do $$
+declare v_first practice_sessions; v_second practice_sessions;
+begin
+  select * into v_first from practice_sessions where id = 'c1000000-0000-0000-0000-000000000005';
+  select * into v_second from practice_submit_session('c1000000-0000-0000-0000-000000000005');
+  if v_second.status is distinct from 'SUBMITTED'
+     or v_second.obtained_marks is distinct from v_first.obtained_marks
+     or v_second.time_spent_seconds is distinct from v_first.time_spent_seconds then
+    raise exception 'FAIL: re-submitting an already-SUBMITTED session should be a safe no-op, got status=%, obtained=% (was %), time=% (was %)',
+      v_second.status, v_second.obtained_marks, v_first.obtained_marks, v_second.time_spent_seconds, v_first.time_spent_seconds;
+  end if;
+  raise notice 'PASS: submitting an already-SUBMITTED session again is a safe no-op (same result, nothing double-counted)';
 end;
 $$;
 

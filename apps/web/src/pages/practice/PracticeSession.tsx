@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
@@ -64,6 +64,26 @@ export function PracticeSession(): JSX.Element {
     onSuccess: () => navigate(`/app/practice/${sessionId}/results`),
   });
 
+  const pauseSession = useMutation({
+    mutationFn: () => api.post(`/practice/sessions/${sessionId}/pause`),
+    onSuccess: () => navigate('/app/practice/attempts'),
+  });
+
+  const resumeSession = useMutation({
+    mutationFn: () => api.post(`/practice/sessions/${sessionId}/resume`),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['practice-session', sessionId] }),
+  });
+
+  // A student returning to a PAUSED session (via "My attempts") picks
+  // up answering immediately - resume it server-side so time tracking
+  // starts a fresh active segment instead of undercounting.
+  useEffect(() => {
+    if (data?.session.status === 'PAUSED' && !resumeSession.isPending && !resumeSession.isSuccess) {
+      resumeSession.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.session.status]);
+
   if (isLoading || !data) return <PageSpinner />;
 
   const answeredCount = data.answers.length;
@@ -127,7 +147,10 @@ export function PracticeSession(): JSX.Element {
       </ol>
 
       <div className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white p-4">
-        <div className="mx-auto flex max-w-3xl justify-end">
+        <div className="mx-auto flex max-w-3xl justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={() => pauseSession.mutate()} disabled={pauseSession.isPending}>
+            {pauseSession.isPending ? 'Saving…' : 'Save & exit'}
+          </button>
           <button type="button" className="btn-primary" onClick={() => submitSession.mutate()} disabled={submitSession.isPending}>
             {submitSession.isPending ? 'Submitting…' : 'Submit practice session'}
           </button>

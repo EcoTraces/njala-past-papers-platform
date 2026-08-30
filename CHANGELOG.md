@@ -363,3 +363,67 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   Playwright e2e still passing.
 - Realistic-volume performance test (50k rows, not part of the
   automated CI suite) recorded in TASK.md "Findings from Loop 08".
+
+## [Unreleased] - Exam practice engine: authoritative scoring, session lifecycle (Loop 09)
+
+### Fixed
+
+- **Critical**: a student could self-assign their own practice score.
+  `practice_answers_owner` (RLS) had no column-level restriction, and
+  the auto-marking trigger only watched
+  `selected_option_id`/`numerical_answer`/`answer_text` - a raw
+  `UPDATE` touching only `marks_awarded`/`is_correct`/`marked_by`
+  bypassed grading entirely and the client's value stuck. Reproduced
+  with a real adversarial probe before fixing. Fixed by widening the
+  trigger to also watch the grading columns and distinguish a genuine
+  staff manual mark (submitted content unchanged, caller holds a
+  marking role) from everything else, which is always recomputed -
+  deliberately not a bare role check, since a LECTURER/LIBRARY_STAFF
+  account can also take practice sessions themselves.
+- **Critical**: a student could inflate their score by answering a
+  question outside their session's own snapshot -
+  `practice_answers_owner`'s `WITH CHECK` never verified the question
+  was actually part of `practice_session_questions`. In the
+  reproduction (a 50-mark question injected into a 5-mark session) this
+  overflowed the `percentage` column outright on submit, a real crash.
+  Fixed at both the RLS layer (the `INSERT` is now refused) and in
+  `practice_submit_session()` (marks sum scoped through the snapshot as
+  defense in depth).
+- **Critical**: manual marking of subjective (ESSAY/SHORT_ANSWER)
+  practice answers had never actually worked, since the original
+  build - not something this loop's other fixes introduced. Postgres
+  requires SELECT-visibility before an UPDATE/DELETE policy is even
+  considered, and `practice_answers` had no SELECT policy for staff at
+  all. Every staff manual-mark call silently affected 0 rows. Fixed
+  with a genuine `practice_answers_select_staff` policy.
+
+### Added
+
+- Real `time_spent_seconds` tracking: `practice_pause_session()`/
+  `practice_resume_session()` RPCs accumulate the active segment's
+  elapsed time on pause and reset the segment start on resume (correct
+  across multiple pause/resume cycles); `practice_submit_session()`
+  adds the final segment before closing out. Previously declared in the
+  schema and fetched by the frontend but never computed by anything,
+  and not rendered even once fetched. Wired the previously-dead pause
+  route into the UI (`PracticeSession.tsx`'s new "Save & exit" button;
+  a reopened `PAUSED` session auto-resumes) and rendered the total on
+  `PracticeResults.tsx`.
+- 5 new `rls_rbac_assertions.sql` scenarios covering all of the above
+  plus duplicate-submission safety (resubmitting an already-`SUBMITTED`
+  session is a no-op, not an error or a re-score), and
+  `practice.session.test.ts` (3 tests) proving the Node routes call the
+  real RPCs.
+
+### Verified
+
+- `npm run build`/`typecheck`/`lint`/`test` all clean; 115 tests
+  passing (up from 112: +3 practice-session RPC-wiring
+  HTTP-integration).
+- 25/25 RLS/RBAC scenarios (42 individual assertions, up from 20/30)
+  and 8/8 Playwright e2e still passing.
+- Every fix verified against a real adversarial reproduction against
+  Postgres before being formalized into the permanent suite, and
+  confirmed not to regress the legitimate flows (a real staff manual
+  mark; a LECTURER taking their own practice session still auto-grading
+  normally).

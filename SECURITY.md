@@ -63,7 +63,7 @@ Three independent layers, in order of how much you should trust them:
    itself validates. This is the layer that still protects the data if
    an API route's authorization check is ever missing or wrong.
    Directly exercised by `supabase/tests/rls_rbac_assertions.sql`
-   against a real Postgres instance (see TESTING.md) - 20 scenarios
+   against a real Postgres instance (see TESTING.md) - 25 scenarios
    including IDOR, IDOR-adjacent (another student's practice session),
    IDOR on the paper workflow (an unrelated lecturer, a lecturer trying
    to approve their own paper), IDOR on paper version history (a
@@ -75,8 +75,11 @@ Three independent layers, in order of how much you should trust them:
    storage access (bypassing the signed-URL flow to read
    `storage.objects` directly), duplicate-content detection at the
    database constraint level, the relevance-search RPC not bypassing
-   RLS despite being callable with an explicit status filter, and
-   anonymous access boundaries.
+   RLS despite being callable with an explicit status filter, a student
+   self-assigning their own practice-answer marks via a raw UPDATE that
+   skips the content columns, a student answering (and having counted)
+   a question outside their session's own snapshot, and anonymous
+   access boundaries.
 
    **RLS policy performance** (Loop 08): a policy's `auth.uid()`/
    `auth_has_role()`/`auth_is_admin()`/`auth_is_staff()` calls should be
@@ -139,6 +142,41 @@ happens inside a SECURITY DEFINER Postgres trigger
 (`mark_practice_answer`), which can read the answer without ever
 returning it - only the computed `is_correct`/`marks_awarded` result
 is exposed.
+
+## Authoritative scoring (never trust the client) - Loop 09
+
+The server, never the client, computes every practice score.
+`mark_practice_answer()` re-derives `is_correct`/`marks_awarded` from
+the actual submitted answer on every insert/update that could
+plausibly change them, and `practice_submit_session()` recomputes
+`obtained_marks`/`percentage` from the graded answers rather than
+trusting anything the client sends on submit (the submit endpoint
+takes no score fields at all - just a session id). A realistic-attack
+pass this loop found two genuine gaps this design had missed:
+
+- A raw `UPDATE` on `practice_answers` that touched only
+  `marks_awarded`/`is_correct` (never the actual content columns)
+  bypassed the auto-marking trigger entirely, since it only watched
+  the content columns - the client's self-assigned score stuck. Fixed
+  by also watching the grading columns and distinguishing "a genuine
+  staff manual mark" from "an attempted self-mark" by whether the
+  submitted content actually changed, not by role alone.
+- `practice_answers` had no RLS check that an answered `question_id`
+  was actually part of the session's own `practice_session_questions`
+  snapshot - a student could answer an out-of-scope question and have
+  it counted toward `obtained_marks`, inflating their score past what
+  `total_marks` accounts for (in the reproduction, badly enough to
+  overflow the `percentage` column outright on submit). Fixed at both
+  the RLS layer (the answer is never insertable) and in
+  `practice_submit_session()` (the marks sum is scoped through the
+  snapshot as defense in depth).
+
+Both were found by writing and running the actual attack against a
+real Postgres instance, not just reading the RLS policy - see
+DATABASE.md's "practice_answers integrity" note, which also covers a
+third, unrelated bug this same pass found: manual marking of
+subjective answers had never actually worked at all (a missing SELECT
+policy for staff), independent of either of the above.
 
 ## Rate limiting, headers, logging
 

@@ -10,6 +10,15 @@ interface SessionResponse {
   answers: Array<{ question_id: string; is_correct: boolean | null; marks_awarded: number | null; auto_marked: boolean }>;
 }
 
+function formatTimeSpent(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours === 0) return `${minutes}m ${seconds}s`;
+  return `${hours}h ${minutes % 60}m`;
+}
+
 export function PracticeResults(): JSX.Element {
   const { sessionId } = useParams<{ sessionId: string }>();
   const { data, isLoading } = useQuery({
@@ -31,6 +40,7 @@ export function PracticeResults(): JSX.Element {
         <p className="mt-1 text-sm text-slate-500">
           {data.session.obtained_marks ?? 0} / {data.session.total_marks} marks
         </p>
+        <p className="mt-1 text-xs text-slate-400">Time spent: {formatTimeSpent(data.session.time_spent_seconds)}</p>
         {pendingManualMarking > 0 && (
           <p className="mt-2 text-xs text-amber-600">{pendingManualMarking} answer(s) still awaiting manual marking - your score may change.</p>
         )}

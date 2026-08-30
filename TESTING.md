@@ -125,6 +125,14 @@ these tests makes a network call. Covers:
   RPC's own SQL correctness (ranking, RLS) is proven separately in
   `rls_rbac_assertions.sql` against a real Postgres instance - this
   file only proves the Node-side wiring is correct.
+- `practice.session.test.ts` (Loop 09) - proves `POST /practice/
+  sessions/:id/pause`/`/resume`/`/submit` call the real
+  `practice_pause_session`/`practice_resume_session`/
+  `practice_submit_session` RPCs (not a plain `UPDATE`) with the
+  session id, since these replaced hand-rolled updates that never
+  recorded real elapsed time and (for submit) didn't recompute scores
+  safely. Again, the RPCs' own correctness is proven separately against
+  real Postgres.
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are
@@ -292,8 +300,31 @@ others:
   call - proving the function's SECURITY INVOKER declaration (not
   SECURITY DEFINER, unlike the counters/marking RPCs) actually matters
   and isn't just a comment.
+- **A student cannot self-assign their own practice score** (Loop 09):
+  a raw `UPDATE` on `practice_answers` touching only `marks_awarded`/
+  `is_correct`/`marked_by` - never the actual submitted-answer content
+  - is silently overwritten back to the correct auto-graded value (or
+  reset to ungraded for a subjective question), while a genuine staff
+  manual mark on someone else's answer still works, and a LECTURER
+  taking their own practice session still auto-grades normally rather
+  than being mistaken for a staff marker.
+- **A student cannot answer a question outside their session's own
+  snapshot** (Loop 09) and have it count: inserting a
+  `practice_answers` row for a verified question that was never part
+  of that session's `practice_session_questions` is blocked outright,
+  and the session's totals on submit reflect only the real snapshot.
+- **Manual marking of a subjective answer actually works** (Loop 09):
+  library staff can SELECT and UPDATE another student's ESSAY answer -
+  this had silently never worked at all before this loop (Postgres
+  requires SELECT-visibility before an UPDATE policy is even
+  considered, and `practice_answers` had no SELECT policy for staff).
+- **`time_spent_seconds` genuinely accumulates** (Loop 09) across
+  pause → resume → submit instead of staying at its default 0 forever,
+  and **duplicate submission is a safe no-op** - resubmitting an
+  already-`SUBMITTED` session returns the identical result rather than
+  erroring or re-scoring.
 
-20 scenarios in total (30 individual PASS assertions - several
+25 scenarios in total (42 individual PASS assertions - several
 scenarios cover more than one assertion each). CI runs this against a real `postgres:16-alpine` service container on
 every push/PR (`.github/workflows/ci.yml`, job `database`).
 

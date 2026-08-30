@@ -28,9 +28,13 @@ recorded in this repository's commit history - not just written.
   regression test), RBAC middleware, the
   full paper workflow (draft → submitted → review → approved →
   published → archived/rejected), question bank + verification,
-  practice sessions with deterministic auto-marking + manual marking
-  for subjective questions, role dashboards, admin user/role/academic-
-  structure management, audit logging, rate limiting, OpenAPI docs.
+  practice sessions with deterministic, server-only auto-marking
+  (never trusts a score from the client) + manual marking for
+  subjective questions (Loop 09 found and fixed three critical
+  practice-integrity bugs here - see TASK.md) + real time-spent
+  tracking across pause/resume/submit, role dashboards, admin
+  user/role/academic-structure management, audit logging, rate
+  limiting, OpenAPI docs.
 - Python FastAPI document-processing service: PyMuPDF text extraction
   with an automatic Tesseract OCR fallback, async job handoff (a
   genuine `QUEUED`→`PROCESSING`→`COMPLETED`/`FAILED` lifecycle,

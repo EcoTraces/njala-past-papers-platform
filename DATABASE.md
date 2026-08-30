@@ -22,6 +22,10 @@ prefix). Seed data for local development is in `supabase/seed/seed.sql`.
 | `..._counters.sql` | `increment_paper_view_count()` / `increment_paper_download_count()` SECURITY DEFINER RPCs |
 | `..._paper_search.sql` | `search_examination_papers()` - SECURITY INVOKER (not DEFINER) relevance-ranked full-text search RPC, `idx_papers_programme`/`idx_papers_created_at`/`idx_papers_download_count` |
 | `..._papers_rls_perf.sql` | Rewrites `examination_papers`'s `papers_select_own`/`papers_select_course_lecturer`/`papers_select_staff` policies to wrap `auth.uid()`/`auth_has_role()`/`auth_is_admin()` in `(select ...)` - a real, measured performance fix (see "Findings from Loop 08" in TASK.md), not a behavior change |
+| `..._practice_answers_mark_tampering_fix.sql` | Widens `mark_practice_answer()`'s trigger to also watch `marks_awarded`/`is_correct`/`auto_marked`, closing a self-scoring hole (see "practice_answers integrity" below) |
+| `..._practice_answers_question_scope_fix.sql` | Tightens `practice_answers_owner`'s `WITH CHECK` to require the answered question be in the session's own snapshot; scopes `practice_submit_session()`'s marks sum through `practice_session_questions` as defense in depth |
+| `..._practice_answers_staff_select_fix.sql` | Adds `practice_answers_select_staff` - fixes manual marking, which had never actually worked (see below) |
+| `..._practice_time_tracking.sql` | `practice_pause_session()`/`practice_resume_session()` RPCs; `practice_submit_session()` updated to finalize `time_spent_seconds` - previously declared in the schema and fetched by the frontend but never actually computed by anything |
 
 ## Design choices
 
@@ -76,9 +80,15 @@ ARCHITECTURE.md; the short version:
   LIBRARY_STAFF/ADMIN/SUPER_ADMIN. Writable per the workflow role
   rules described in ARCHITECTURE.md.
 - `practice_sessions`/`practice_session_questions`/`practice_answers`:
-  owner-only, plus a narrow staff-only UPDATE policy on
+  owner-only, plus a narrow staff-only SELECT+UPDATE pair on
   `practice_answers` for manual marking (never SELECT of others'
-  sessions, never a student setting their own `marks_awarded`).
+  *sessions*, never a student setting their own `marks_awarded`).
+  `practice_answers_owner`'s `WITH CHECK` also requires the answered
+  `question_id` to actually be in that session's own
+  `practice_session_questions` snapshot - added in Loop 09 after a real
+  attack found that without it, a student could answer (and have
+  counted) a verified question that was never actually presented to
+  them in that session.
 - `answer_keys`: staff or the question's own author only - never a
   plain STUDENT role.
 - `audit_logs`: SELECT restricted to LIBRARY_STAFF/ADMIN/SUPER_ADMIN;
@@ -105,6 +115,41 @@ benefits its INSERT/UPDATE/DELETE policies and other RLS-protected
 tables too; a broader pass is flagged in ROADMAP.md rather than done
 speculatively here without the matching realistic-volume measurement
 to justify each change.
+
+**`practice_answers` integrity (Loop 09)**: three real bugs found by
+actually attacking the practice-marking flow, not just reading the
+policy comments:
+1. `practice_answers_owner` (`for all`, owner-scoped) had no
+   column-level restriction, and the auto-marking trigger only fired
+   on `INSERT/UPDATE OF selected_option_id, numerical_answer,
+   answer_text` - so a raw `UPDATE` touching only `marks_awarded`/
+   `is_correct` bypassed grading entirely and the client's value stuck.
+   Fixed by also watching those grading columns in the trigger, and
+   having it distinguish "a genuine staff manual mark" (the submitted
+   *content* is unchanged, and the caller holds a marking role) from
+   everything else (always recompute/reset instead of trusting the
+   client) - not a bare role check alone, since a LECTURER/
+   LIBRARY_STAFF account can also take practice sessions themselves.
+2. The `practice_answers_owner` `WITH CHECK` fix described above
+   (question must be in the session's own snapshot) - a stray answer
+   for an out-of-scope question previously inflated `obtained_marks`
+   past what `total_marks` accounted for, badly enough in the
+   reproduction to overflow the `percentage` column outright on submit.
+3. `practice_answers` had **no SELECT policy for staff at all** -
+   `practice_answers_mark_staff` only ever granted UPDATE. Postgres
+   requires a row be visible under an applicable SELECT policy before
+   an UPDATE/DELETE policy's own `USING` is even considered, so every
+   staff manual-mark attempt on another user's answer silently affected
+   0 rows - a pre-existing bug (reproduced identically against the
+   schema exactly as it originally shipped, before this loop's other
+   two fixes), not something these two introduced. Manual marking of
+   subjective (ESSAY/SHORT_ANSWER) answers had never actually worked.
+   Fixed with a genuine `practice_answers_select_staff` policy.
+
+All three verified with real adversarial `EXPLAIN`/attack probes before
+being formalized into `rls_rbac_assertions.sql`, and confirmed not to
+regress the legitimate flows (a real staff manual mark, and a LECTURER
+taking their own practice session still auto-grading normally).
 
 ## Storage
 

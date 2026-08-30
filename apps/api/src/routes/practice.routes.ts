@@ -108,28 +108,16 @@ export async function practiceRoutes(app: FastifyInstance): Promise<void> {
     return answer;
   });
 
-  app.post('/sessions/:id/pause', { preHandler: authenticate, schema: { tags: ['practice'] } }, async (request) => {
+  app.post('/sessions/:id/pause', { preHandler: authenticate, schema: { tags: ['practice'], summary: 'Pause a session, accumulating time spent so far' } }, async (request) => {
     const { id } = request.params as { id: string };
-    const { data, error } = await request.db
-      .from('practice_sessions')
-      .update({ status: 'PAUSED', paused_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('status', 'IN_PROGRESS')
-      .select()
-      .single();
+    const { data, error } = await request.db.rpc('practice_pause_session', { p_session_id: id });
     if (error) throw error;
     return data;
   });
 
-  app.post('/sessions/:id/resume', { preHandler: authenticate, schema: { tags: ['practice'] } }, async (request) => {
+  app.post('/sessions/:id/resume', { preHandler: authenticate, schema: { tags: ['practice'], summary: 'Resume a paused session' } }, async (request) => {
     const { id } = request.params as { id: string };
-    const { data, error } = await request.db
-      .from('practice_sessions')
-      .update({ status: 'IN_PROGRESS' })
-      .eq('id', id)
-      .eq('status', 'PAUSED')
-      .select()
-      .single();
+    const { data, error } = await request.db.rpc('practice_resume_session', { p_session_id: id });
     if (error) throw error;
     return data;
   });

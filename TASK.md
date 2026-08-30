@@ -429,6 +429,91 @@ source rather than trusting the earlier audit:
   the same call - proving the RPC doesn't accidentally widen access
   relative to the plain query path.
 
+## Findings from Loop 09 (exam practice engine: authoritative scoring, session lifecycle)
+
+- **`[CRITICAL BUG]` → fixed: a student could self-assign their own
+  practice score.** `practice_answers_owner` (RLS, owner-scoped `for
+  all`) has no column-level restriction, and the auto-marking trigger
+  only fired on `INSERT/UPDATE OF selected_option_id, numerical_answer,
+  answer_text`. A raw `UPDATE` touching only `marks_awarded`/
+  `is_correct`/`marked_by` - the exact vector a real client hitting
+  Supabase's PostgREST API directly (not through this repo's own Node
+  route, which never does this) would use - never triggered grading at
+  all, and the client's self-assigned value simply stuck. Reproduced
+  with a real adversarial probe against Postgres before fixing: a
+  student flipped their own wrong MC answer to `marks_awarded=10,
+  is_correct=true` and it worked, pre-fix. Fixed by widening the
+  trigger to also watch the grading columns and distinguish "a genuine
+  staff manual mark" (submitted *content* unchanged, caller holds a
+  marking role) from everything else (always recompute/reset) -
+  deliberately not a bare role check, since a LECTURER/LIBRARY_STAFF
+  account can also take practice sessions themselves; verified that
+  case specifically doesn't regress.
+- **`[CRITICAL BUG]` → fixed: a student could inflate their score by
+  answering a question outside their session's snapshot.**
+  `practice_answers_owner`'s `WITH CHECK` verified the *session*
+  belonged to the caller but never verified the *question* was
+  actually part of that session's `practice_session_questions`
+  snapshot. A student could `INSERT` an answer for any verified
+  question in the whole bank and have it counted -
+  `practice_submit_session()`'s `obtained_marks` summed every
+  `practice_answers` row for the session with no such scoping. In the
+  reproduction (a 50-mark question injected into a 5-mark, 1-question
+  session), this didn't just inflate the score quietly - it overflowed
+  the `percentage` column outright on submit (`numeric field
+  overflow`), a real crash, not just a wrong number. Fixed at both
+  layers: RLS now refuses the `INSERT`, and `practice_submit_session()`
+  additionally scopes its marks sum through `practice_session_questions`
+  as defense in depth.
+- **`[CRITICAL BUG]` → fixed: manual marking of subjective answers had
+  never actually worked, since the original build.** Not something
+  this loop's other two fixes introduced - reproduced identically
+  against the schema exactly as it originally shipped, before touching
+  anything. `practice_answers_mark_staff` grants `LECTURER`/
+  `LIBRARY_STAFF`/`ADMIN` UPDATE authority on any row, but
+  `practice_answers` had **no SELECT policy for staff at all**
+  (`practice_answers_owner` is owner-scoped only) - and Postgres
+  requires a row be visible under an applicable SELECT policy before an
+  UPDATE/DELETE policy's own `USING` is even considered. Every staff
+  UPDATE against another user's answer silently affected 0 rows; a
+  plain `select * from practice_answers` as library staff returned
+  nothing at all. `POST /api/practice/answers/:answerId/mark` (which
+  uses the RLS-scoped client, not the service role) would have failed
+  on every real call. Fixed with a genuine
+  `practice_answers_select_staff` policy.
+- **`[MISSING]` → implemented: `time_spent_seconds` actually gets
+  computed.** The column has existed since the original schema and
+  `apps/web`'s `PracticeResults.tsx` already fetched it into its type,
+  but nothing ever wrote to it (stayed at its default `0` forever) and
+  the frontend didn't even render it once fetched - "see time spent" is
+  an explicit item in the brief. Implemented via two new RPCs
+  (`practice_pause_session`/`practice_resume_session`) that accumulate
+  the active segment's elapsed time on pause and reset the segment
+  start on resume (so multiple pause/resume cycles sum correctly, not
+  just the first segment or double-counted paused time);
+  `practice_submit_session()` adds the final active segment before
+  closing out. Wired the previously-dead pause route into the actual
+  UI (`PracticeSession.tsx`'s new "Save & exit" button; a session
+  reopened while `PAUSED` auto-resumes so the next segment starts
+  cleanly) and rendered the total on `PracticeResults.tsx`.
+- **Verified, not re-implemented**: full-text-search-independent
+  session-lifecycle behaviors the brief calls out were already correct
+  once actually tested against real Postgres - duplicate submission
+  (`practice_submit_session` is idempotent, returns the identical
+  result rather than erroring or re-scoring), unauthorized session
+  access (RLS blocks it, already covered by the original suite's
+  scenario 3), and browser-refresh/network-failure resilience (every
+  answer is saved individually via `upsert` the instant it changes, not
+  batched at submit - a refresh or dropped connection loses at most the
+  one most-recent unsaved keystroke, not the whole session).
+- All four bugs found by writing and running the actual attack/
+  reproduction against a real Postgres instance first, then formalizing
+  into `rls_rbac_assertions.sql` (14 → 25 scenarios) once confirmed -
+  not discovered by reading the policy comments (which, for the
+  mark-tampering case, explicitly asserted a guarantee - "so a student
+  can never set their own marks_awarded/is_correct by hand" - the
+  schema didn't actually enforce).
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -463,7 +548,7 @@ from a clean checkout.
 | Academic structure CRUD (faculties/departments/programmes/courses/academic-years/semesters) | `[COMPLETE]` | |
 | Paper workflow (upload/submit/review/approve/publish/reject/archive/delete/download/bookmark/version-replace) | `[COMPLETE]` | State machine enforced in code + RLS; unit-tested. Versioning added Loop 06: `GET`/`POST /:id/versions`, three-independent-check upload validation (MIME/extension/magic-bytes), orphaned-storage-object cleanup, duplicate-content 409s |
 | Question bank (create/read/update/verify/delete) | `[COMPLETE]` | Answer/`is_correct` stripped for non-staff at the route layer (defense in depth on top of RLS) |
-| Practice (sessions/answers/submit/manual marking) | `[COMPLETE]` | Deterministic auto-marking verified at the DB layer |
+| Practice (sessions/answers/pause/resume/submit/manual marking) | `[COMPLETE]` | Deterministic, server-only auto-marking verified at the DB layer; Loop 09 found and fixed three real integrity bugs (score self-assignment, out-of-snapshot answers, manual marking never working) and implemented real `time_spent_seconds` tracking - see "Findings from Loop 09" |
 | Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Analytics is basic (counts, top lists) - no time-series/export |
 | Notifications (list/mark-read/mark-all-read) | `[COMPLETE]` | Creation is system-only (no client insert), by design |
 | Admin (users/staff provisioning/status/roles/audit logs/system settings) | `[COMPLETE]` | |
@@ -484,7 +569,9 @@ from a clean checkout.
 | No overly-broad policies | `[COMPLETE]` | Audited every `for all`/`is not null`-only policy this pass - none grant unscoped write access; read-all policies are restricted to genuinely public reference data |
 | Storage bucket + policy | `[COMPLETE]` | Private bucket, signed URLs, a defense-in-depth SELECT policy on `storage.objects` |
 | Storage-level RLS *test* (as opposed to the bucket policy existing) | `[COMPLETE]` | Added this pass: direct `storage.objects` SELECT under a student role, plus proof that no role (including LIBRARY_STAFF) can write to it directly |
-| Auto-marking trigger, `practice_submit_session` RPC | `[COMPLETE]` | Verified against a real Postgres instance with real inserts (not mocked) |
+| Auto-marking trigger, `practice_submit_session` RPC | `[COMPLETE]` | Verified against a real Postgres instance with real inserts (not mocked). Loop 09: closed a self-scoring hole (trigger widened to also watch grading columns) and an out-of-snapshot-answer score-inflation hole (RLS + the RPC's marks sum both scoped to the session's real snapshot) |
+| `practice_answers` staff visibility | `[COMPLETE]` | Loop 09: fixed a pre-existing bug (not this loop's other fixes - reproduced against the untouched schema) that made manual marking of subjective answers completely non-functional - no SELECT policy for staff existed at all |
+| Practice time tracking (`time_spent_seconds`) | `[COMPLETE]` | Loop 09: implemented via `practice_pause_session`/`practice_resume_session` RPCs; previously declared in the schema and fetched by the frontend but never computed or displayed |
 | Seed data | `[COMPLETE]` | Clearly dev/demo-only, never applied to production |
 | Migrations run clean from empty DB | `[COMPLETE]` | `scripts/db-test-setup.sh`, re-verified this session |
 | Privilege-escalation-specific RLS tests | `[COMPLETE]` | Student→ADMIN and ADMIN→SUPER_ADMIN self-grant both proven blocked (`42501`) |
@@ -507,11 +594,11 @@ from a clean checkout.
 | Suite | Status | Count |
 |---|---|---|
 | `packages/shared` unit | `[COMPLETE]` | 19 |
-| `apps/api` unit + integration | `[COMPLETE]` | 91 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06) + 8 document-processing service unit (Loop 07) + 7 internal-callback HTTP-integration (Loop 07) + 1 reprocess-endpoint RBAC (Loop 07) + 5 search-filter/relevance-sort HTTP-integration (Loop 08)) |
+| `apps/api` unit + integration | `[COMPLETE]` | 94 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration + 6 extension-validation unit + 6 real-PDF-fixture integration (Loop 06) + 1 versioning-endpoint RBAC (Loop 06) + 8 document-processing service unit (Loop 07) + 7 internal-callback HTTP-integration (Loop 07) + 1 reprocess-endpoint RBAC (Loop 07) + 5 search-filter/relevance-sort HTTP-integration (Loop 08) + 3 practice-session RPC-wiring HTTP-integration (Loop 09)) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 8, public-routes-only (incl. 2 responsive-layout regression tests added in Loop 05); no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 16 (4 original + 6 real-scanned-PDF/OCR-resilience + 6 job-pipeline (PROCESSING callback, recoverable/non-recoverable classification, timeout, non-blocking-extraction) - all Loop 07) |
-| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 20 scenarios (30 individual PASS assertions): the original 14 plus Loop 06's 4 (duplicate-detection, `paper_versions` authorization, guessed-storage-path) plus Loop 08's 2 (search-relevance-ranking-correctness, search-RPC-cannot-bypass-RLS) |
+| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 25 scenarios (42 individual PASS assertions): the original 14 plus Loop 06's 4 (duplicate-detection, `paper_versions` authorization, guessed-storage-path) plus Loop 08's 2 (search-relevance-ranking-correctness, search-RPC-cannot-bypass-RLS) plus Loop 09's 5 (mark-tampering blocked, out-of-snapshot-answer blocked, staff manual marking actually works, time tracking accumulates, duplicate submission is a safe no-op) |
 
 ## Prioritized implementation checklist (highest priority first)
 
@@ -525,7 +612,8 @@ from a clean checkout.
 8. ~~Loop 06: implement paper versioning, filename-extension validation, real-file testing, and an explicit paper-ID/storage-path IDOR adversarial pass.~~ **done - found and fixed two real bugs (a fake rollback comment with no actual rollback behind it; an RLS-rejected version replace masked as a 500 instead of 403) along the way**
 9. ~~Loop 07: audit/harden the Python document-processing pipeline - genuine `PROCESSING` state, non-blocking extraction with a hard timeout, retry handling for recoverable failures, real-scanned-PDF OCR testing.~~ **done - found and fixed three real bugs (`PROCESSING` was a dead enum value; extraction blocked the Python service's own event loop; a dispatch failure left a job silently stuck at `QUEUED` forever with no way to notice or recover) along the way**
 10. ~~Loop 08: search/discovery - real filters, working relevance ranking, realistic-volume performance testing.~~ **done - found and fixed two real bugs (`courseCode` silently ignored; `sort=relevance` did nothing) and a major RLS-vs-GIN-index performance regression (~940ms → ~29-110ms) that a realistic 50k-row test surfaced and a small-fixture test never could have**
-11. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment, a real message queue for document processing (a failed *callback* itself still has no automatic recovery - see docs/architecture/document-processing.md), the `(select ...)` RLS-performance pattern applied beyond `examination_papers`'s SELECT policies, faculty/department/programme filters in the browse UI.
+11. ~~Loop 09: exam practice engine - authoritative server-side scoring, session lifecycle (pause/resume/submit/duplicate-submission), time tracking.~~ **done - found and fixed three critical, previously-undiscovered practice-integrity bugs (a student could self-assign their own score via a raw UPDATE; a student could inflate their score answering a question outside their session's snapshot, badly enough to overflow a column and crash submit; manual marking of subjective answers had never actually worked since the original build) and implemented real `time_spent_seconds` tracking that previously stayed at 0 forever**
+12. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment, a real message queue for document processing (a failed *callback* itself still has no automatic recovery - see docs/architecture/document-processing.md), the `(select ...)` RLS-performance pattern applied beyond `examination_papers`'s SELECT policies, faculty/department/programme filters in the browse UI.
 
 ## Verification (this pass)
 
@@ -533,8 +621,8 @@ from a clean checkout.
 npm run build            # shared → api → web, all clean, test files excluded from all three dist/ outputs
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
-npm run test               # shared 19, api 91, web 2 - all passing (112 total)
-bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 20/20 RLS/RBAC scenarios passing, fresh DB
+npm run test               # shared 19, api 94, web 2 - all passing (115 total)
+bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 25/25 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 8/8 e2e passing
 cd apps/document-service && python -m pytest tests/ && ruff check .   # 16/16 tests passing, lint clean
 ```
