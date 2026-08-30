@@ -27,6 +27,13 @@ export function ProtectedRoute({ children, roles }: ProtectedRouteProps): JSX.El
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
+  if (user.status !== 'ACTIVE') {
+    // A PENDING/SUSPENDED/DEACTIVATED account never reaches the app
+    // shell, even in the brief window right after signup before the
+    // next authenticate()-gated API call would otherwise reject it.
+    return <Navigate to="/account-pending" replace />;
+  }
+
   if (roles && !hasRole(...roles)) {
     return <Navigate to="/forbidden" replace />;
   }

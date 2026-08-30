@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 import { api, ApiError } from '../../lib/apiClient';
 import { PageSpinner } from '../../components/Spinner';
 
@@ -13,6 +14,13 @@ interface UserRow {
 }
 
 const STAFF_ROLES = ['LECTURER', 'LIBRARY_STAFF', 'ADMIN', 'SUPER_ADMIN'] as const;
+
+const STATUS_BADGE_STYLES: Record<string, string> = {
+  ACTIVE: 'bg-green-100 text-green-800',
+  PENDING: 'bg-amber-100 text-amber-800',
+  SUSPENDED: 'bg-red-100 text-red-800',
+  DEACTIVATED: 'bg-slate-200 text-slate-600',
+};
 
 export function AdminUsers(): JSX.Element {
   const queryClient = useQueryClient();
@@ -109,10 +117,14 @@ export function AdminUsers(): JSX.Element {
                     <td className="px-4 py-2 font-medium text-slate-900">{u.full_name}</td>
                     <td className="px-4 py-2 text-slate-600">{u.student_id ?? u.staff_id}</td>
                     <td className="px-4 py-2 text-slate-600">{u.user_roles.map((r) => r.roles?.name).filter(Boolean).join(', ')}</td>
-                    <td className="px-4 py-2 text-slate-600">{u.status}</td>
+                    <td className="px-4 py-2">
+                      <span className={clsx('badge', STATUS_BADGE_STYLES[u.status] ?? 'bg-slate-100 text-slate-700')}>{u.status}</span>
+                    </td>
                     <td className="px-4 py-2 text-right">
                       {u.status === 'ACTIVE' ? (
                         <button type="button" className="btn-danger" onClick={() => updateStatus.mutate({ id: u.id, status: 'SUSPENDED' })}>Suspend</button>
+                      ) : u.status === 'PENDING' ? (
+                        <button type="button" className="btn-primary" onClick={() => updateStatus.mutate({ id: u.id, status: 'ACTIVE' })}>Activate</button>
                       ) : (
                         <button type="button" className="btn-secondary" onClick={() => updateStatus.mutate({ id: u.id, status: 'ACTIVE' })}>Reactivate</button>
                       )}

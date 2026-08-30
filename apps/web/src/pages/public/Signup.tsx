@@ -34,8 +34,11 @@ export function Signup(): JSX.Element {
   const onSubmit = handleSubmit(async (values) => {
     setServerError(null);
     try {
-      await signupStudent(values);
-      navigate('/app', { replace: true });
+      const profile = await signupStudent(values);
+      // New accounts start PENDING until a library staff member/admin
+      // activates them (see SECURITY.md) - never route straight into
+      // the app shell for an account that can't call any API yet.
+      navigate(profile.status === 'ACTIVE' ? '/app' : '/account-pending', { replace: true });
     } catch (err) {
       setServerError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     }

@@ -18,7 +18,10 @@ recorded in this repository's commit history - not just written.
   see TESTING.md), not just written and hoped-for.
 
 **Backend**
-- Fastify API: student-ID + staff-email auth, RBAC middleware, the
+- Fastify API: student-ID + staff-email auth (including a real
+  account-activation gate - self-registered students start `PENDING`
+  and need a LIBRARY_STAFF/ADMIN to activate them, verified by a
+  regression test), RBAC middleware, the
   full paper workflow (draft → submitted → review → approved →
   published → archived/rejected), question bank + verification,
   practice sessions with deterministic auto-marking + manual marking

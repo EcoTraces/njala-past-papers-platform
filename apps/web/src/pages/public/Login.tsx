@@ -1,16 +1,19 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import type { z } from 'zod';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import * as Tabs from '@radix-ui/react-tabs';
+import { studentLoginSchema, staffLoginSchema } from '@njala/shared';
 import { useAuth } from '../../hooks/useAuth';
 import { ApiError } from '../../lib/apiClient';
 
-const studentSchema = z.object({ studentId: z.string().min(1, 'Student ID is required'), password: z.string().min(1, 'Password is required') });
-const staffSchema = z.object({ email: z.string().email(), password: z.string().min(1, 'Password is required') });
-type StudentLoginForm = z.infer<typeof studentSchema>;
-type StaffLoginForm = z.infer<typeof staffSchema>;
+// Reuses the same schemas the API validates against (packages/shared),
+// so login-time format feedback (and the studentId normalization -
+// upper-cased/trimmed - the backend also applies) never drifts from
+// what the server actually accepts.
+type StudentLoginForm = z.infer<typeof studentLoginSchema>;
+type StaffLoginForm = z.infer<typeof staffLoginSchema>;
 
 export function Login(): JSX.Element {
   const { loginStudent, loginStaff } = useAuth();
@@ -19,8 +22,8 @@ export function Login(): JSX.Element {
   const [serverError, setServerError] = useState<string | null>(null);
   const redirectTo = location.state?.from?.pathname ?? '/app';
 
-  const studentForm = useForm<StudentLoginForm>({ resolver: zodResolver(studentSchema) });
-  const staffForm = useForm<StaffLoginForm>({ resolver: zodResolver(staffSchema) });
+  const studentForm = useForm<StudentLoginForm>({ resolver: zodResolver(studentLoginSchema) });
+  const staffForm = useForm<StaffLoginForm>({ resolver: zodResolver(staffLoginSchema) });
 
   const onStudentSubmit = studentForm.handleSubmit(async (values) => {
     setServerError(null);

@@ -9,6 +9,7 @@ import { About } from './pages/public/About';
 import { Help } from './pages/public/Help';
 import { Contact } from './pages/public/Contact';
 import { Forbidden } from './pages/public/Forbidden';
+import { AccountPending } from './pages/public/AccountPending';
 import { NotFound } from './pages/public/NotFound';
 
 import { DashboardRouter } from './pages/dashboard/DashboardRouter';
@@ -44,6 +45,7 @@ export function App(): JSX.Element {
       <Route path="/help" element={<Help />} />
       <Route path="/contact" element={<Contact />} />
       <Route path="/forbidden" element={<Forbidden />} />
+      <Route path="/account-pending" element={<AccountPending />} />
 
       <Route
         path="/app"

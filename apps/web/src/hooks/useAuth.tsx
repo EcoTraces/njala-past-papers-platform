@@ -3,7 +3,7 @@ import type { AppRole, StudentSignupInput } from '@njala/shared';
 import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/apiClient';
 
-interface AuthProfile {
+export interface AuthProfile {
   id: string;
   studentId: string | null;
   staffId: string | null;
@@ -22,7 +22,10 @@ interface AuthContextValue {
   loading: boolean;
   loginStudent: (studentId: string, password: string) => Promise<void>;
   loginStaff: (email: string, password: string) => Promise<void>;
-  signupStudent: (input: StudentSignupInput) => Promise<void>;
+  /** Returns the created profile so the caller can branch on `status`
+   *  (a self-registered account starts PENDING, not ACTIVE - see
+   *  SECURITY.md "account activation"). */
+  signupStudent: (input: StudentSignupInput) => Promise<AuthProfile>;
   logout: () => Promise<void>;
   hasRole: (...roles: AppRole[]) => boolean;
 }
@@ -81,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     const res = await api.post<AuthSessionResponse>('/auth/signup', input, { auth: false });
     await hydrateFromResponse(res);
     setUser(res.profile);
+    return res.profile;
   }, []);
 
   const logout = useCallback(async () => {

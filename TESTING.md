@@ -48,6 +48,20 @@ these tests makes a network call. Covers:
   duplicate-detection unique index depends on), and storage-key
   sanitization against path traversal (`../../etc/passwd` as a "course
   code" cannot escape its directory).
+- `services/auth.service.test.ts` - the account-activation state
+  machine: `signupStudent()` always creates a `PENDING` profile (never
+  `ACTIVE`), and `loginStudent()` rejects a `PENDING` account with a
+  clear message before ever attempting a Supabase sign-in. Mocks the
+  Supabase boundary (`../lib/supabase.js`) with a small fake query
+  builder rather than hitting a real project.
+
+Test files are excluded from the production build
+(`tsconfig.build.json` in `apps/api` and `packages/shared`) but are
+still typechecked by `npm run typecheck` (the full `tsconfig.json`) -
+this is deliberate: it's what caught a type error in the
+`auth.service.test.ts` mock during development, and losing that
+coverage to make the build pass would have been a worse fix than
+splitting the configs.
 
 ## apps/web - unit/component tests (Vitest + Testing Library)
 

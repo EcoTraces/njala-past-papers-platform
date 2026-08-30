@@ -22,6 +22,16 @@
   step for a future iteration; it wasn't adopted here to avoid also
   needing CSRF protection for a token that's otherwise sent as a bearer
   header on every request.
+- **Account activation**: self-registration cannot verify a Student ID
+  against a real institutional roster, so `signupStudent()` creates the
+  profile as `PENDING`, not `ACTIVE`. `loginStudent()` rejects a
+  `PENDING` account outright with a clear message, and the
+  `authenticate()` middleware rejects it on every subsequent API call
+  regardless. A LIBRARY_STAFF/ADMIN activates the account via
+  `PATCH /api/admin/users/:id/status`. The frontend enforces this too:
+  `ProtectedRoute` redirects any signed-in user whose `status !==
+  'ACTIVE'` to `/account-pending` rather than rendering the app shell
+  (defense in depth - the API/RLS layers are what actually matter).
 - **Failed-login lockout**: `profiles.failed_login_attempts` /
   `locked_until` are updated in `auth.service.ts`; 5 consecutive
   failures locks the account for 15 minutes. Error messages are

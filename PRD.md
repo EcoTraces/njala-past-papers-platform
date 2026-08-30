@@ -31,9 +31,15 @@ through the admin API. Only SUPER_ADMIN can grant SUPER_ADMIN.
 ## Core user journeys (implemented)
 
 1. **Student sign-up and login.** A student registers with their
-   Student ID, programme, and a password; logs in with Student ID +
-   password thereafter. See ARCHITECTURE.md for how this maps onto
-   Supabase Auth, which requires an email-shaped identifier.
+   Student ID, programme, and a password. Self-registration cannot
+   verify a Student ID against the institution's real roster, so the
+   account is created `PENDING` and must be activated by a
+   LIBRARY_STAFF/ADMIN before it can log in (see "account activation"
+   in SECURITY.md) - the student sees a clear "awaiting activation"
+   screen in the meantime rather than a broken app. Once active, they
+   log in with Student ID + password thereafter. See ARCHITECTURE.md
+   for how this maps onto Supabase Auth, which requires an
+   email-shaped identifier.
 2. **Discover papers.** Search/filter by course, faculty, department,
    academic year, semester, and examination type; full-text search
    across title and OCR-extracted content; sort by recency or

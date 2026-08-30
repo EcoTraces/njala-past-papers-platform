@@ -71,7 +71,12 @@ export async function signupStudent(input: StudentSignupInput): Promise<AuthResu
     contact_email: input.contactEmail ?? null,
     programme_id: input.programmeId,
     entry_year: input.entryYear,
-    status: 'ACTIVE',
+    // Self-registration cannot verify a Student ID against the
+    // institution's real roster, so new accounts start PENDING and
+    // require a LIBRARY_STAFF/ADMIN to activate them (PATCH
+    // /api/admin/users/:id/status). Both loginStudent() and the
+    // authenticate() middleware reject non-ACTIVE accounts.
+    status: 'PENDING',
   });
 
   if (profileError) {
@@ -83,6 +88,12 @@ export async function signupStudent(input: StudentSignupInput): Promise<AuthResu
   const { data: studentRole } = await supabaseAdmin.from('roles').select('id').eq('name', 'STUDENT').single();
   await supabaseAdmin.from('user_roles').insert({ user_id: created.user.id, role_id: studentRole!.id });
 
+  // Signed in immediately so the frontend has a session to show the
+  // "your account is pending activation" screen with (and so the
+  // session is ready to go the moment an admin activates the
+  // account) - but every subsequent authenticated API call will be
+  // rejected by authenticate() until an admin flips the status to
+  // ACTIVE, exactly as it would be for any other PENDING account.
   const { data: signIn, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
     email: studentAuthIdentifier(input.studentId),
     password: input.password,
@@ -104,7 +115,7 @@ export async function signupStudent(input: StudentSignupInput): Promise<AuthResu
       studentId: input.studentId,
       staffId: null,
       fullName: input.fullName,
-      status: 'ACTIVE',
+      status: 'PENDING',
       roles: ['STUDENT'],
     },
   };
@@ -144,6 +155,9 @@ export async function loginStudent(studentId: string, password: string): Promise
   }
   if (profile.status === 'SUSPENDED') throw new ForbiddenError('This account has been suspended.');
   if (profile.status === 'DEACTIVATED') throw new ForbiddenError('This account has been deactivated.');
+  if (profile.status === 'PENDING') {
+    throw new ForbiddenError('This account is awaiting activation by an administrator or library staff member.');
+  }
 
   const { data: signIn, error } = await supabaseAdmin.auth.signInWithPassword({
     email: studentAuthIdentifier(studentId),
