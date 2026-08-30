@@ -322,6 +322,113 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Scenario 12: unauthorized storage access. Direct storage.objects
+-- visibility must mirror examination_papers visibility - a student
+-- reading the Storage API directly (bypassing the API's signed-URL
+-- flow) must still only ever see the published paper's object, never
+-- the draft's, even though both objects live in the same bucket.
+-- ---------------------------------------------------------------------
+insert into storage.objects (bucket_id, name) values
+  ('examination-papers', 'CSC101/test/draft.pdf'),
+  ('examination-papers', 'CSC101/test/published.pdf');
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare published_count int;
+declare draft_count int;
+begin
+  select count(*) into published_count from storage.objects where name = 'CSC101/test/published.pdf';
+  select count(*) into draft_count from storage.objects where name = 'CSC101/test/draft.pdf';
+  if published_count <> 1 or draft_count <> 0 then
+    raise exception 'FAIL: student storage.objects visibility incorrect (published=%, draft=%)', published_count, draft_count;
+  end if;
+  raise notice 'PASS: student can read the published paper''s storage object but not the draft''s';
+end;
+$$;
+
+-- No client role - not even staff - has an INSERT/UPDATE/DELETE
+-- policy on storage.objects at all (uploads go through the API's
+-- service-role client only, see SECURITY.md). Prove a STUDENT can't
+-- write, then prove LIBRARY_STAFF can't either - the absence of a
+-- policy should block everyone identically.
+do $$
+begin
+  begin
+    insert into storage.objects (bucket_id, name) values ('examination-papers', 'CSC101/test/student-uploaded.pdf');
+    raise exception 'FAIL: a STUDENT was able to insert a storage.objects row directly';
+  exception when insufficient_privilege then
+    raise notice 'PASS: student cannot write to storage.objects directly';
+  end;
+end;
+$$;
+
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', false);
+
+do $$
+begin
+  begin
+    insert into storage.objects (bucket_id, name) values ('examination-papers', 'CSC101/test/staff-uploaded.pdf');
+    raise exception 'FAIL: LIBRARY_STAFF was able to insert a storage.objects row directly (uploads must go through the service-role client only)';
+  exception when insufficient_privilege then
+    raise notice 'PASS: library staff cannot write to storage.objects directly either - uploads are API/service-role only';
+  end;
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 13: lecturer ownership cannot be self-granted. A lecturer
+-- with no course_lecturers row for a course must not be able to
+-- create one for themselves (which would otherwise let them upload/
+-- manage papers for a course they were never assigned to).
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000002', false);
+
+do $$
+begin
+  begin
+    insert into course_lecturers (course_id, lecturer_id)
+      values ('44444444-4444-4444-4444-444444444401', '20000000-0000-0000-0000-000000000002');
+    raise exception 'FAIL: a lecturer was able to self-assign ownership of a course';
+  exception when insufficient_privilege then
+    raise notice 'PASS: a lecturer cannot self-assign course ownership (course_lecturers is admin-write only)';
+  end;
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Scenario 14: manipulated request parameters - a lecturer cannot
+-- reassign a paper's uploaded_by to someone else via UPDATE (a classic
+-- mass-assignment/IDOR-via-update vector), even for their own draft.
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', false);
+
+do $$
+begin
+  begin
+    update examination_papers
+      set uploaded_by = '20000000-0000-0000-0000-000000000002'
+      where id = 'a1000000-0000-0000-0000-000000000001';
+    raise exception 'FAIL: a lecturer was able to reassign a paper''s uploaded_by to another user';
+  exception when insufficient_privilege then
+    raise notice 'PASS: a lecturer cannot reassign uploaded_by on their own draft paper';
+  end;
+end;
+$$;
+
+reset role;
+
 rollback;
 
 \echo 'All RLS/RBAC assertions passed.'

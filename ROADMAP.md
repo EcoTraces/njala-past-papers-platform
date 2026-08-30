@@ -14,7 +14,9 @@ recorded in this repository's commit history - not just written.
   settings).
 - RLS on every table, private Storage bucket with signed URLs,
   SECURITY DEFINER helpers, a deterministic auto-marking trigger.
-- RLS/RBAC verified against a real Postgres instance (11 scenarios;
+- RLS/RBAC verified against a real Postgres instance (15 scenarios,
+  including direct storage.objects access and mass-assignment/
+  self-escalation attempts;
   see TESTING.md), not just written and hoped-for.
 
 **Backend**

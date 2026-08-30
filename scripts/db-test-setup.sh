@@ -78,6 +78,12 @@ psql -v ON_ERROR_STOP=1 <<'SQL'
 grant select, insert, update, delete on all tables in schema public to anon, authenticated;
 grant usage, select on all sequences in schema public to anon, authenticated;
 grant execute on all functions in schema public to anon, authenticated;
+
+-- Supabase grants the same table-level privileges on storage.objects/
+-- storage.buckets to anon/authenticated as it does in public - RLS
+-- (enabled on storage.objects by the ..._storage.sql migration) is
+-- what actually narrows access, exactly like every other table here.
+grant select, insert, update, delete on storage.objects, storage.buckets to anon, authenticated;
 SQL
 
 echo "==> Applying seed data"

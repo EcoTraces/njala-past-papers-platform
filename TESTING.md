@@ -150,8 +150,24 @@ others:
   (same `42501` check as the student self-escalation case) - privilege
   escalation is blocked by the database, not just by application code.
 - Anonymous (no session) sees only published papers.
+- **Unauthorized storage access**: reading `storage.objects` directly
+  (bypassing the API's signed-URL flow entirely) mirrors
+  `examination_papers` visibility exactly - a student can read the
+  published paper's object row but not the draft's. No role - not a
+  student, not even LIBRARY_STAFF - can `INSERT`/`UPDATE`/`DELETE`
+  `storage.objects` directly at all; uploads only ever happen through
+  the API's service-role client (there is no client-facing write
+  policy for anyone, by design - see SECURITY.md).
+- **Lecturer ownership cannot be self-granted**: a lecturer cannot
+  `INSERT` their own `course_lecturers` row to assign themselves to a
+  course (blocked - that table is admin-write only).
+- **Manipulated request parameters**: a lecturer cannot `UPDATE` their
+  own draft paper's `uploaded_by` to reassign it to someone else - a
+  classic mass-assignment/IDOR-via-update vector, blocked by the
+  `WITH CHECK` clause on the same policy that lets them edit their own
+  draft.
 
-CI runs this against a real `postgres:16-alpine` service container on
+15 scenarios in total. CI runs this against a real `postgres:16-alpine` service container on
 every push/PR (`.github/workflows/ci.yml`, job `database`).
 
 ## CI

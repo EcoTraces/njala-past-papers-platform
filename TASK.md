@@ -101,10 +101,10 @@ from a clean checkout.
 | Area | Status | Notes |
 |---|---|---|
 | Schema (23 tables across 8 migrations) | `[COMPLETE]` | Verified applying cleanly to a real Postgres instance this session |
-| RLS on every table | `[COMPLETE]` | Verified via `pg_policies`/`relrowsecurity` and the 11-scenario assertion suite |
+| RLS on every table | `[COMPLETE]` | Verified via `pg_policies`/`relrowsecurity` and the 15-scenario assertion suite |
 | No overly-broad policies | `[COMPLETE]` | Audited every `for all`/`is not null`-only policy this pass - none grant unscoped write access; read-all policies are restricted to genuinely public reference data |
 | Storage bucket + policy | `[COMPLETE]` | Private bucket, signed URLs, a defense-in-depth SELECT policy on `storage.objects` |
-| Storage-level RLS *test* (as opposed to the bucket policy existing) | `[MISSING]` | The assertion suite tests `examination_papers` row visibility, not a direct `storage.objects` SELECT under different roles - see Loop 02 |
+| Storage-level RLS *test* (as opposed to the bucket policy existing) | `[COMPLETE]` | Added this pass: direct `storage.objects` SELECT under a student role, plus proof that no role (including LIBRARY_STAFF) can write to it directly |
 | Auto-marking trigger, `practice_submit_session` RPC | `[COMPLETE]` | Verified against a real Postgres instance with real inserts (not mocked) |
 | Seed data | `[COMPLETE]` | Clearly dev/demo-only, never applied to production |
 | Migrations run clean from empty DB | `[COMPLETE]` | `scripts/db-test-setup.sh`, re-verified this session |
@@ -130,14 +130,14 @@ from a clean checkout.
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 6, public-routes-only; no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 4 |
-| DB RLS/RBAC (`supabase/tests/`) | `[PARTIAL]` | 11 scenarios covering the core RBAC matrix; missing a direct storage.objects test and a few of the specific attack scenarios Loop 03 calls for (manipulated request parameters, lecturer modifying an unauthorized *course's* metadata as opposed to its papers) |
+| DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 15 scenarios: the original 11 plus direct storage.objects access, lecturer course-ownership self-assignment, and mass-assignment-via-UPDATE (`uploaded_by` reassignment) |
 
 ## Prioritized implementation checklist (highest priority first)
 
 1. ~~Fix the account-activation gap (security-relevant, small, safe)~~ **done this pass**
 2. ~~Fix build output hygiene (test files in dist)~~ **done this pass**
 3. ~~Remove duplicate login validation schemas~~ **done this pass**
-4. Loop 02: add a direct `storage.objects` RLS test; add course-lecturer-ownership and manipulated-parameter scenarios to the assertion suite.
+4. ~~Loop 02: add a direct `storage.objects` RLS test; add course-lecturer-ownership and manipulated-parameter scenarios to the assertion suite.~~ **done**
 5. Loop 03: add `app.inject()`-based HTTP integration tests proving the exact attack scenarios listed in the brief; add a stricter rate limit on `/api/auth/*`.
 6. Loop 04: confirm (already largely true per the table above) every module is real; no action expected beyond documentation touch-ups.
 7. Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; consider route-based code splitting for the JS bundle.
@@ -150,6 +150,6 @@ npm run build            # shared → api → web, all clean, test files exclude
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
 npm run test               # shared 19, api 29, web 2 - all passing
-bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 11/11 RLS/RBAC scenarios passing, fresh DB
+bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 15/15 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 6/6 e2e passing
 ```
