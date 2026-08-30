@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { FAKE_USERS, auth } from './test/fakeSupabase.js';
 
 /**
  * Integration tests that hit the real Fastify app end to end
@@ -12,150 +13,16 @@ import type { FastifyInstance } from 'fastify';
  * itself is the final backstop). This file proves the middle layer -
  * the API's own RBAC enforcement - actually rejects requests when
  * wired into real route registration, real Zod parsing, and real
- * error handling.
- *
- * Every scenario here is a case where the API is expected to reject
- * the request during preHandler or before the handler touches the
- * database, so the only thing that needs mocking is the
- * authenticate() middleware's dependency on Supabase Auth + the
- * profiles/user_roles tables - never request.db itself. If a test
- * ever reaches request.db, the fake client below throws, which turns
- * "this test's assumption about where the rejection happens was
- * wrong" into a loud failure instead of a silently-wrong pass.
+ * error handling. See src/test/fakeSupabase.ts for what is and isn't
+ * mocked and why.
  */
 
-interface FakeUser {
-  id: string;
-  studentId: string | null;
-  staffId: string | null;
-  fullName: string;
-  status: string;
-  roles: string[];
-}
-
-const FAKE_USERS: Record<string, FakeUser> = {
-  'student-token': {
-    id: '10000000-0000-0000-0000-000000000001',
-    studentId: 'NJ2024STU01',
-    staffId: null,
-    fullName: 'Test Student',
-    status: 'ACTIVE',
-    roles: ['STUDENT'],
-  },
-  'lecturer1-token': {
-    id: '20000000-0000-0000-0000-000000000001',
-    studentId: null,
-    staffId: 'STF0001',
-    fullName: 'Test Lecturer One',
-    status: 'ACTIVE',
-    roles: ['LECTURER'],
-  },
-  'lecturer2-token': {
-    id: '20000000-0000-0000-0000-000000000002',
-    studentId: null,
-    staffId: 'STF0002',
-    fullName: 'Test Lecturer Two',
-    status: 'ACTIVE',
-    roles: ['LECTURER'],
-  },
-  'library-token': {
-    id: '30000000-0000-0000-0000-000000000001',
-    studentId: null,
-    staffId: 'STF0003',
-    fullName: 'Test Library Staff',
-    status: 'ACTIVE',
-    roles: ['LIBRARY_STAFF'],
-  },
-  'admin-token': {
-    id: '40000000-0000-0000-0000-000000000001',
-    studentId: null,
-    staffId: 'STF0004',
-    fullName: 'Test Admin (not super)',
-    status: 'ACTIVE',
-    roles: ['ADMIN'],
-  },
-  'super-admin-token': {
-    id: '50000000-0000-0000-0000-000000000001',
-    studentId: null,
-    staffId: 'STF0005',
-    fullName: 'Test Super Admin',
-    status: 'ACTIVE',
-    roles: ['SUPER_ADMIN'],
-  },
-};
-
-function unexpectedDbCall(): never {
-  throw new Error(
-    'A test in app.rbac.test.ts reached request.db, meaning the API did not reject the request before touching the database. ' +
-      'Every scenario in this file is expected to be rejected earlier (preHandler or an in-handler check before any DB call) - ' +
-      'if this fires, either the authorization check regressed, or the test itself is asserting the wrong thing.',
-  );
-}
-
-const unauthorizedDbStub = new Proxy(
-  {},
-  {
-    get: () => unexpectedDbCall,
-  },
-);
-
-// authenticate() makes two lookups against the real Supabase client:
-// profiles (.maybeSingle()) and user_roles (an array via .eq()) - the
-// fake `from()` below branches per table to match both shapes exactly.
 vi.mock('./lib/supabase.js', async () => {
-  const admin = {
-    auth: {
-      getUser: async (token: string) => {
-        const user = FAKE_USERS[token];
-        if (!user) return { data: { user: null }, error: { message: 'invalid token' } };
-        return { data: { user: { id: user.id } }, error: null };
-      },
-    },
-    from: (table: string) => {
-      if (table === 'profiles') {
-        return {
-          select: () => ({
-            eq: (_col: string, value: string) => ({
-              maybeSingle: async () => {
-                const user = Object.values(FAKE_USERS).find((u) => u.id === value);
-                if (!user) return { data: null, error: null };
-                return {
-                  data: {
-                    id: user.id,
-                    student_id: user.studentId,
-                    staff_id: user.staffId,
-                    full_name: user.fullName,
-                    status: user.status,
-                    deleted_at: null,
-                  },
-                  error: null,
-                };
-              },
-            }),
-          }),
-        };
-      }
-      if (table === 'user_roles') {
-        return {
-          select: () => ({
-            eq: async (_col: string, value: string) => {
-              const user = Object.values(FAKE_USERS).find((u) => u.id === value);
-              return { data: (user?.roles ?? []).map((name) => ({ roles: { name } })), error: null };
-            },
-          }),
-        };
-      }
-      return unauthorizedDbStub;
-    },
-  };
-  return { supabaseAdmin: admin, supabaseAnon: unauthorizedDbStub, supabaseForUser: () => unauthorizedDbStub };
+  const { createSupabaseMock } = await import('./test/fakeSupabase.js');
+  return createSupabaseMock();
 });
 
 const { buildApp } = await import('./app.js');
-
-function auth(token: string): { authorization: string } {
-  return { authorization: `Bearer ${token}` };
-}
 
 describe('RBAC enforced end to end through the real HTTP pipeline (no frontend involved)', () => {
   let app: FastifyInstance;

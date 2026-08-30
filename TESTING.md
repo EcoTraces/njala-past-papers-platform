@@ -76,9 +76,23 @@ these tests makes a network call. Covers:
   project runs Fastify 4), and the centralized error handler was
   masking legitimate `4xx` errors from Fastify/its plugins as generic
   `500`s.
+- `papers.rbac.test.ts` - the same HTTP-level pattern applied to the
+  paper workflow/question bank/practice modules (12 scenarios): a
+  student or a lecturer blocked from approving/rejecting/archiving/
+  deleting a paper, a student or a lecturer blocked from verifying a
+  question (verification is a library/admin action, not even the
+  question's own author's), a student blocked from manually marking a
+  practice answer, and unauthenticated requests to start a practice
+  session or browse papers both rejected - this deployment requires a
+  session even to browse, by design.
 - `auth.rate-limit.test.ts` - drives `/api/auth/login` past its
   per-route budget (10/minute) and asserts a real `429` with a proper
   error body comes back, not a masked `500`.
+- `test/fakeSupabase.ts` - not a test file itself, the shared fake
+  Supabase boundary `app.rbac.test.ts` and `papers.rbac.test.ts` both
+  use, so the ~50-line mock isn't duplicated a third time. Also
+  excluded from the production build (`tsconfig.build.json`'s
+  `src/test/**` exclusion).
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are

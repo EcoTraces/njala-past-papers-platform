@@ -107,6 +107,32 @@ that no prior test (50 passing unit tests at the time) had caught:
    rejected by, proving the check is role-specific rather than an
    accidental blanket lockout.
 
+## Findings from Loop 04 (Node API audit)
+
+Re-verified every claim in the Backend table below against the actual
+source rather than trusting the earlier audit:
+
+- **No orphan/fake route modules.** `ls apps/api/src/routes/` lists 11
+  files; `app.ts` imports and registers all 11, no more, no fewer.
+  Every implemented API module really is wired into the running app.
+- **Extended HTTP-level RBAC integration coverage to the paper
+  workflow, question bank, and practice modules** - the core domain
+  objects, and the ones with the most state-dependent authorization.
+  New `papers.rbac.test.ts` (12 scenarios): student/lecturer blocked
+  from approve/reject/archive/delete on a paper, student/lecturer
+  blocked from verifying a question, student blocked from manually
+  marking a practice answer, and unauthenticated requests to
+  `POST /api/practice/sessions` and `GET /api/papers` both rejected
+  (401) - this deployment requires a session even to browse, by
+  design (see PRD.md).
+- **Refactored the fake-Supabase test boundary into a shared helper**
+  (`apps/api/src/test/fakeSupabase.ts`) instead of duplicating the same
+  ~50-line mock a third time across `app.rbac.test.ts` and the new
+  `papers.rbac.test.ts` - the exact kind of duplication CODING_RULES.md
+  says not to leave in. Also added `src/test/**` to
+  `tsconfig.build.json`'s exclude list so this new test-only helper
+  doesn't end up in the production build output either.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -181,7 +207,7 @@ from a clean checkout.
 | Suite | Status | Count |
 |---|---|---|
 | `packages/shared` unit | `[COMPLETE]` | 19 |
-| `apps/api` unit + integration | `[COMPLETE]` | 45 (27 original + 2 activation-gate + 15 RBAC HTTP-integration + 1 rate-limit) |
+| `apps/api` unit + integration | `[COMPLETE]` | 57 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
 | `apps/web` e2e (Playwright) | `[PARTIAL]` | 6, public-routes-only; no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 4 |
@@ -194,7 +220,7 @@ from a clean checkout.
 3. ~~Remove duplicate login validation schemas~~ **done this pass**
 4. ~~Loop 02: add a direct `storage.objects` RLS test; add course-lecturer-ownership and manipulated-parameter scenarios to the assertion suite.~~ **done**
 5. ~~Loop 03: add `app.inject()`-based HTTP integration tests proving the exact attack scenarios listed in the brief; add a stricter rate limit on `/api/auth/*`.~~ **done - also found and fixed two real bugs (app couldn't boot; 429s were masked as 500s) that only surfaced once something finally booted the real app**
-6. Loop 04: confirm (already largely true per the table above) every module is real; no action expected beyond documentation touch-ups.
+6. ~~Loop 04: confirm every module is real; no orphan routes.~~ **done - confirmed, and extended RBAC HTTP-integration coverage to the paper/question/practice modules (12 more tests)**
 7. Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; consider route-based code splitting for the JS bundle.
 8. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment.
 
@@ -204,7 +230,7 @@ from a clean checkout.
 npm run build            # shared → api → web, all clean, test files excluded from all three dist/ outputs
 npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
-npm run test               # shared 19, api 45, web 2 - all passing (66 total)
+npm run test               # shared 19, api 57, web 2 - all passing (78 total)
 bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 15/15 RLS/RBAC scenarios passing, fresh DB
 npx playwright test        # 6/6 e2e passing
 ```

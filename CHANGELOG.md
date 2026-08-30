@@ -131,3 +131,30 @@ nothing had ever actually constructed the app before.
   Fastify app's request logging out of test output.
 
 See TASK.md ("Findings from Loop 03") for the full writeup.
+
+## [Unreleased] - Node API audit (Loop 04)
+
+### Added
+
+- `papers.rbac.test.ts` (12 HTTP-level integration scenarios): extends
+  the app.inject()-based RBAC coverage from Loop 03 to the paper
+  workflow, question bank, and practice modules - a student/lecturer
+  blocked from approve/reject/archive/delete on a paper, a
+  student/lecturer blocked from verifying a question, a student
+  blocked from manually marking a practice answer, and unauthenticated
+  requests to start a practice session or browse papers both rejected.
+
+### Changed
+
+- Extracted the fake-Supabase test boundary shared by `app.rbac.test.ts`
+  and the new `papers.rbac.test.ts` into `apps/api/src/test/fakeSupabase.ts`
+  instead of duplicating the mock a third time. `tsconfig.build.json`
+  now also excludes `src/test/**` so this test-only helper doesn't ship
+  in the production build output.
+
+### Verified
+
+- Every route module under `apps/api/src/routes/` (11 files) is
+  imported and registered in `app.ts` - no orphan/fake route files.
+- 78 total unit/integration tests passing (19 shared + 57 api + 2
+  web); full monorepo build/typecheck/lint clean.
