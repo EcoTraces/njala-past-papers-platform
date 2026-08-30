@@ -1,0 +1,45 @@
+# Local, containerized full-stack run. Requires a running Supabase
+# instance (local via `supabase start`, from supabase/ - see
+# docs/deployment/README.md - or a hosted project) with SUPABASE_URL
+# etc. set in apps/api/.env and apps/web/.env before building.
+#
+#   docker compose up --build
+#
+# For day-to-day development, running each app with `npm run dev`
+# (apps/web, apps/api) and `uvicorn app.main:app --reload`
+# (apps/document-service) is faster than rebuilding containers.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - apps/api/.env
+    ports:
+      - '4000:4000'
+    depends_on:
+      - document-service
+    restart: unless-stopped
+
+  document-service:
+    build:
+      context: apps/document-service
+      dockerfile: Dockerfile
+    env_file:
+      - apps/document-service/.env
+    ports:
+      - '8000:8000'
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+        VITE_API_BASE_URL: http://localhost:4000/api
+    ports:
+      - '5173:80'
+    depends_on:
+      - api

@@ -1,0 +1,67 @@
+# Render Blueprint - deploys the Node API and the Python document
+# processing service together. Import this repository in the Render
+# dashboard ("New +" -> "Blueprint") and it will pick this file up.
+# See docs/deployment/README.md for the full walkthrough, including
+# which secrets must be set manually (never committed here).
+services:
+  - type: web
+    name: njala-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: WEB_APP_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: examination-papers
+      - key: STUDENT_AUTH_IDENTIFIER_DOMAIN
+        value: students.njala.auth.internal
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: DOCUMENT_SERVICE_URL
+        sync: false # set to the njala-document-service's Render URL, e.g. https://njala-document-service.onrender.com
+      - key: DOCUMENT_SERVICE_CALLBACK_SECRET
+        generateValue: true
+      - key: RATE_LIMIT_MAX
+        value: 100
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000
+      - key: SIGNED_URL_EXPIRY_SECONDS
+        value: 300
+      - key: LOG_LEVEL
+        value: info
+
+  - type: web
+    name: njala-document-service
+    runtime: docker
+    dockerfilePath: ./apps/document-service/Dockerfile
+    dockerContext: ./apps/document-service
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: DOCUMENT_SERVICE_ENV
+        value: production
+      - key: DOCUMENT_SERVICE_SHARED_SECRET
+        sync: false # must match njala-api's DOCUMENT_SERVICE_CALLBACK_SECRET
+      - key: NODE_API_CALLBACK_URL
+        sync: false # set to https://<njala-api Render URL>/api/internal/processing-callback
+      - key: TESSERACT_CMD
+        value: tesseract
+      - key: OCR_LANGUAGE
+        value: eng
+      - key: MAX_UPLOAD_MB
+        value: 25

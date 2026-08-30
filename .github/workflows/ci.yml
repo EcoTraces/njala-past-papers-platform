@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node (shared, api, web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build:shared
+      - run: npm run typecheck --workspace apps/api
+      - run: npm run typecheck --workspace apps/web
+      - run: npm run lint --workspace apps/api
+      - run: npm run lint --workspace apps/web
+      - run: npm run test --workspace apps/api
+      - run: npm run test --workspace apps/web
+      - run: npm run build:api
+      - run: npm run build:web
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: placeholder-anon-key
+          VITE_API_BASE_URL: http://localhost:4000/api
+
+  document-service:
+    name: Python document-service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: apps/document-service/requirements-dev.txt
+      - name: Install tesseract
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Install dependencies
+        working-directory: apps/document-service
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        working-directory: apps/document-service
+        run: ruff check app tests
+      - name: Test
+        working-directory: apps/document-service
+        run: pytest -v
+
+  database:
+    name: Database migrations + RLS/RBAC tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: njala_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: njala_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply Supabase-shaped stub schema (auth/storage) + migrations + seed
+        run: bash scripts/db-test-setup.sh
+      - name: Run RLS/RBAC assertions
+        run: bash scripts/db-test-assertions.sh
