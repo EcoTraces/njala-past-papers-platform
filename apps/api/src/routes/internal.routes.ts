@@ -1,9 +1,28 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { autoRetryProcessingJob, shouldAutoRetry } from '../services/documentProcessing.service.js';
+
+/**
+ * Loop 11 (security hardening): a plain `!==` string comparison is not
+ * constant-time - the JS engine short-circuits at the first mismatched
+ * character, so response latency leaks (in principle) how many
+ * leading characters of a guess were correct, letting an attacker
+ * recover DOCUMENT_SERVICE_CALLBACK_SECRET byte-by-byte over enough
+ * requests. Hashing both sides first fixes the "must be equal length"
+ * requirement `timingSafeEqual` otherwise imposes (the raw secret and
+ * an attacker's guess are rarely the same length) without leaking
+ * length as a separate signal, and the digest comparison itself is
+ * constant-time.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedHash = createHash('sha256').update(provided).digest();
+  const expectedHash = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(providedHash, expectedHash);
+}
 
 const callbackSchema = z.object({
   jobId: z.string().uuid(),
@@ -29,7 +48,7 @@ const callbackSchema = z.object({
 export async function internalRoutes(app: FastifyInstance): Promise<void> {
   app.post('/processing-callback', { schema: { tags: ['health'], summary: 'Internal: document-service job completion callback' } }, async (request, reply) => {
     const secret = request.headers['x-internal-secret'];
-    if (secret !== env.DOCUMENT_SERVICE_CALLBACK_SECRET) {
+    if (typeof secret !== 'string' || !secretsMatch(secret, env.DOCUMENT_SERVICE_CALLBACK_SECRET)) {
       throw new UnauthorizedError('Invalid internal service credentials');
     }
 

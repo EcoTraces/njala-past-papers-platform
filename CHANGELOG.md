@@ -484,3 +484,51 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   and `recentActivity` are reachable only via the ADMIN/SUPER_ADMIN
   admin-dashboard route; student `performance`/`recommendations` only
   ever read the calling student's own rows.
+
+## [Unreleased] - Full security audit and hardening (Loop 11)
+
+### Fixed
+
+- **Critical**: `question_options.is_correct` (the MCQ/TRUE_FALSE
+  answer key) was readable by ANY authenticated caller, including a
+  plain STUDENT, for ANY verified question system-wide - RLS had a
+  bare `verification_status = 'VERIFIED'` branch with no role/session
+  check, and table-level GRANTs are wide open (RLS is the real
+  boundary), so this was reachable via a raw PostgREST/supabase-js
+  call using just the caller's own JWT, bypassing the Node API's
+  JSON-level answer-stripping entirely. Scoped to staff/the question's
+  author/its course's lecturer/a caller with a legitimate practice-
+  session link to that exact question.
+- **Critical**: `answer_keys` (the NUMERICAL-question answer key) was
+  readable by ANY lecturer regardless of which course they teach - the
+  "LECTURER → answer-key leakage" scenario named in this loop's brief.
+  Two overlapping RLS policies both granted this (a `for all` policy's
+  `USING` clause governs SELECT too), so both had to be scoped
+  together. Scoped to staff/the question's author/its course's
+  lecturer - this table has no legitimate SELECT path anywhere in the
+  API at all, so no residual risk remains.
+- Staff/admin accounts (LECTURER/LIBRARY_STAFF/ADMIN/SUPER_ADMIN) had
+  no per-account brute-force lockout - only student accounts did.
+  Extended the same `failed_login_attempts`/`locked_until` mechanism to
+  `loginStaff()`.
+- The internal document-processing callback's shared-secret check used
+  a non-constant-time `!==` comparison. Replaced with a
+  SHA-256-then-`timingSafeEqual` comparison.
+- `trustProxy: true` trusted an unbounded number of proxy hops,
+  letting a client-supplied `X-Forwarded-For` header spoof a fresh
+  `request.ip` on every request and defeat every per-IP rate limit.
+  Changed to `trustProxy: 1`, matching the single reverse-proxy hop
+  this app is actually deployed behind (Render).
+
+### Verified
+
+- Reviewed and found already correct: CORS allowlist, CSP/security
+  headers, password-reset user-enumeration resistance, cross-course
+  question modification (RLS-blocked), unpublished-paper access via
+  signed download URLs (RLS-scoped), LIBRARY_STAFF reaching admin-only
+  routes (router-level role gate excludes it), self-role-escalation to
+  ADMIN/SUPER_ADMIN.
+- `rls_rbac_assertions.sql` scenario 27 (5 new assertions) and 2 new
+  `auth.service.test.ts` tests for the staff lockout fix.
+- 122 Node tests (up from 120), 27/27 RLS/RBAC scenarios (up from 26),
+  8/8 Playwright e2e, 16/16 Python tests + `ruff check` clean.

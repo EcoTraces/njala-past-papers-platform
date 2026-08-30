@@ -25,7 +25,22 @@ export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: fastifyLoggerOptions,
     genReqId: () => randomUUID(),
-    trustProxy: true,
+    // Loop 11 (security hardening): `trustProxy: true` trusts an
+    // arbitrary NUMBER of proxy hops, which means it takes the
+    // left-most entry of a client-supplied `X-Forwarded-For` header at
+    // face value - since intermediary proxies typically APPEND their
+    // own hop rather than replacing the header, an attacker can just
+    // prepend their own fake IP (`X-Forwarded-For: 1.2.3.4, ...`) to
+    // get a fresh `request.ip` on every request, trivially defeating
+    // every per-IP rate limit in this app (the global one and the
+    // tighter login/signup/password-reset ones in auth.routes.ts).
+    // This deploys on Render (render.yaml) behind exactly one reverse
+    // proxy hop, so `1` tells Fastify to trust only the single
+    // Render-appended hop and derive the real client IP from the
+    // actual TCP connection otherwise - safe in local dev/tests too
+    // (no proxy hops present, so it falls back to the raw socket
+    // address).
+    trustProxy: 1,
   });
 
   // Default, unauthenticated Supabase client for the request; swapped

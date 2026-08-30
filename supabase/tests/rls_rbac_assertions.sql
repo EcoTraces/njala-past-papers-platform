@@ -1068,6 +1068,105 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Scenario 27 (Loop 11): answer-key leakage via question_options.
+-- is_correct/answer_keys.correct_answer_text - RLS is the real
+-- enforcement boundary (table grants are wide open to anon/
+-- authenticated, matching Supabase's normal pattern), so these must
+-- hold against a direct query, not just through the Node API's JSON-
+-- level stripAnswers().
+-- ---------------------------------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', false); -- student1
+
+do $$
+declare visible_count int;
+begin
+  -- b1000000-...004 is VERIFIED but deliberately NOT part of
+  -- student1's practice_session_questions snapshot (see the fixture
+  -- comment above scenario 22). Before this loop's fix,
+  -- question_options_select had a bare "verification_status =
+  -- VERIFIED" branch with no role/ownership/session check at all, so
+  -- this would have been visible to any authenticated caller,
+  -- including a student who had never even started a session
+  -- referencing it.
+  select count(*) into visible_count from question_options where id = 'b2000000-0000-0000-0000-000000000003';
+  if visible_count <> 0 then
+    raise exception 'FAIL: a student must not see question_options (and its is_correct) for a VERIFIED question outside any of their own practice sessions';
+  end if;
+  raise notice 'PASS: a student cannot read question_options.is_correct for a verified question outside their own practice sessions';
+end;
+$$;
+
+do $$
+declare visible_count int;
+begin
+  -- b1000000-...002 IS part of student1's own session snapshot
+  -- (c1000000-...001) - this must keep working, otherwise
+  -- PracticeSession.tsx breaks (it renders option_label/option_text
+  -- via this exact RLS path).
+  select count(*) into visible_count from question_options where question_id = 'b1000000-0000-0000-0000-000000000002';
+  if visible_count <> 2 then
+    raise exception 'FAIL: a student must still see question_options for a question that IS part of their own practice session snapshot, saw %', visible_count;
+  end if;
+  raise notice 'PASS: a student still sees question_options for their own practice session''s questions (no regression)';
+end;
+$$;
+
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000002', false); -- lecturer2 (NOT assigned to CSC101)
+
+do $$
+declare visible_count int;
+begin
+  -- Before this loop's fix, answer_keys_select_staff used
+  -- auth_is_staff(), which is true for ANY lecturer - lecturer2 could
+  -- read lecturer1's CSC101 answer key despite having no relationship
+  -- to that course at all.
+  select count(*) into visible_count from answer_keys where question_id = 'b1000000-0000-0000-0000-000000000001';
+  if visible_count <> 0 then
+    raise exception 'FAIL: a lecturer with no relationship to the course must not read that course''s answer_keys';
+  end if;
+  raise notice 'PASS: a lecturer not assigned to the course cannot read its answer_keys';
+end;
+$$;
+
+do $$
+declare visible_count int;
+begin
+  select count(*) into visible_count from question_options where question_id = 'b1000000-0000-0000-0000-000000000002';
+  if visible_count <> 0 then
+    raise exception 'FAIL: a lecturer with no relationship to the course must not read that course''s question_options (is_correct)';
+  end if;
+  raise notice 'PASS: a lecturer not assigned to the course cannot read its question_options.is_correct';
+end;
+$$;
+
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', false); -- lecturer1 (author + assigned to CSC101)
+
+do $$
+declare visible_count int;
+begin
+  -- Regression check: the legitimate authoring/review workflow for
+  -- the course's own lecturer must be completely unaffected.
+  select count(*) into visible_count from answer_keys where question_id = 'b1000000-0000-0000-0000-000000000001';
+  if visible_count <> 1 then
+    raise exception 'FAIL: the course''s own lecturer (and question author) must still read its answer_keys, saw %', visible_count;
+  end if;
+
+  select count(*) into visible_count from question_options where question_id = 'b1000000-0000-0000-0000-000000000002';
+  if visible_count <> 2 then
+    raise exception 'FAIL: the course''s own lecturer (and question author) must still read its question_options, saw %', visible_count;
+  end if;
+  raise notice 'PASS: the course''s own lecturer/question-author still has full answer-key visibility (no regression)';
+end;
+$$;
+
+reset role;
+
 rollback;
 
 \echo 'All RLS/RBAC assertions passed.'

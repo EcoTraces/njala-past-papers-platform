@@ -27,6 +27,7 @@ prefix). Seed data for local development is in `supabase/seed/seed.sql`.
 | `..._practice_answers_staff_select_fix.sql` | Adds `practice_answers_select_staff` - fixes manual marking, which had never actually worked (see below) |
 | `..._practice_time_tracking.sql` | `practice_pause_session()`/`practice_resume_session()` RPCs; `practice_submit_session()` updated to finalize `time_spent_seconds` - previously declared in the schema and fetched by the frontend but never actually computed by anything |
 | `..._admin_dashboard_stats.sql` | `admin_dashboard_stats()` - SECURITY INVOKER, returns `active_users`/`total_views`/`total_downloads`/`total_practice_attempts` as real `SUM()`/`COUNT()` aggregates, which PostgREST's plain query builder can't express (same class of problem `search_examination_papers()` solved for `ts_rank()` in Loop 08) |
+| `..._answer_key_leakage_fix.sql` | Re-scopes `question_options_select` and both `answer_keys_select_staff`/`answer_keys_write_staff` - previously any authenticated caller (question_options) or any lecturer regardless of course (answer_keys) could read the actual correct answer via a direct PostgREST call; see "Findings from Loop 11" in TASK.md |
 
 ## Design choices
 

@@ -192,24 +192,53 @@ export async function loginStudent(studentId: string, password: string): Promise
 }
 
 export async function loginStaff(email: string, password: string): Promise<AuthResult> {
-  const { data: signIn, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });
-  if (error || !signIn.session || !signIn.user) {
-    throw new UnauthorizedError('Invalid email or password');
+  // Staff accounts (LECTURER/LIBRARY_STAFF/ADMIN/SUPER_ADMIN - the most
+  // privileged accounts on the platform) previously had NO per-account
+  // lockout at all, unlike loginStudent below - only the shared per-IP
+  // route rate limit (10/minute) stood between an attacker and
+  // unlimited password guesses against, say, a SUPER_ADMIN account, as
+  // long as they stayed under that per-IP budget (or spread guesses
+  // across IPs). `contact_email` is set to the same value as the
+  // Supabase Auth identifier at staff-account creation time (see
+  // admin.routes.ts's `/staff` provisioning route), so it's used here
+  // to look the profile up *before* attempting sign-in, mirroring
+  // loginStudent's pattern - if it's ever edited to diverge from the
+  // real Auth email, this just degrades to "no lockout tracked" rather
+  // than blocking a legitimate login.
+  const { data: profile } = await supabaseAdmin
+    .from('profiles')
+    .select('id, student_id, staff_id, full_name, status, failed_login_attempts, locked_until, deleted_at')
+    .eq('contact_email', email)
+    .maybeSingle();
+
+  const invalidCredentials = () => new UnauthorizedError('Invalid email or password');
+
+  if (profile?.locked_until && new Date(profile.locked_until) > new Date()) {
+    throw new ForbiddenError('This account is temporarily locked due to repeated failed sign-in attempts. Try again later.');
   }
 
-  const { data: profile } = await supabaseAdmin
+  const { data: signIn, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });
+  if (error || !signIn.session || !signIn.user) {
+    if (profile && !profile.deleted_at) {
+      await registerFailedAttempt(profile.id, profile.failed_login_attempts);
+      await recordAuditEvent({ actorId: profile.id, action: 'auth.login_failed', entityType: 'profiles', entityId: profile.id });
+    }
+    throw invalidCredentials();
+  }
+
+  const { data: confirmedProfile } = await supabaseAdmin
     .from('profiles')
     .select('id, student_id, staff_id, full_name, status, deleted_at')
     .eq('id', signIn.user.id)
     .maybeSingle();
 
-  if (!profile || profile.deleted_at) throw new UnauthorizedError('Invalid email or password');
-  if (profile.status !== 'ACTIVE') throw new ForbiddenError('This account is not active. Contact an administrator.');
+  if (!confirmedProfile || confirmedProfile.deleted_at) throw invalidCredentials();
+  if (confirmedProfile.status !== 'ACTIVE') throw new ForbiddenError('This account is not active. Contact an administrator.');
 
-  await finalizeSuccessfulLogin(profile.id);
-  await recordAuditEvent({ actorId: profile.id, action: 'auth.login_success', entityType: 'profiles', entityId: profile.id });
+  await finalizeSuccessfulLogin(confirmedProfile.id);
+  await recordAuditEvent({ actorId: confirmedProfile.id, action: 'auth.login_success', entityType: 'profiles', entityId: confirmedProfile.id });
 
-  const roles = await loadRoles(profile.id);
+  const roles = await loadRoles(confirmedProfile.id);
   return {
     session: {
       accessToken: signIn.session.access_token,
@@ -217,11 +246,11 @@ export async function loginStaff(email: string, password: string): Promise<AuthR
       expiresAt: signIn.session.expires_at ?? 0,
     },
     profile: {
-      id: profile.id,
-      studentId: profile.student_id,
-      staffId: profile.staff_id,
-      fullName: profile.full_name,
-      status: profile.status,
+      id: confirmedProfile.id,
+      studentId: confirmedProfile.student_id,
+      staffId: confirmedProfile.staff_id,
+      fullName: confirmedProfile.full_name,
+      status: confirmedProfile.status,
       roles,
     },
   };

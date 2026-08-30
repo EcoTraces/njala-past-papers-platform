@@ -584,6 +584,121 @@ source rather than trusting the earlier audit:
   reflects real aggregate data and correctly excludes a `SUSPENDED`
   account from `active_users`).
 
+## Findings from Loop 11 (full security audit and hardening)
+
+- **`[CRITICAL BUG]` → fixed: `question_options.is_correct` (the MCQ/
+  TRUE_FALSE answer key) was readable by ANY authenticated caller for
+  ANY verified question, system-wide - including a plain STUDENT, with
+  no role/session check at all.** `question_options_select`'s RLS had a
+  bare `q.verification_status = 'VERIFIED'` branch. Table-level GRANTs
+  on every `public` table are wide open to `anon`/`authenticated` (the
+  normal Supabase pattern - RLS is meant to be the actual enforcement
+  layer), so this was directly reachable via a raw PostgREST/
+  supabase-js call using nothing but the caller's own valid JWT - not
+  just through this repo's Node API, whose `stripAnswers()` only
+  strips the JSON response and never touched RLS at all. A student
+  could look up the correct answer to any verified question before (or
+  during) a practice attempt, completely undermining the practice
+  engine's integrity - more severe than ordinary cross-tenant leakage,
+  since it reaches every unprivileged caller, not just an unrelated
+  staff account. Reproduced against a real Postgres instance before
+  fixing (student1 querying `question_options` directly for a verified
+  question outside their own practice session). Fixed by scoping
+  visibility to: staff (LIBRARY_STAFF/ADMIN/SUPER_ADMIN), the
+  question's own author or a lecturer assigned to its course (via
+  `course_lecturers`, matching the established
+  `papers_select_course_lecturer` pattern), or a caller with a
+  legitimate `practice_session_questions` row for that exact question
+  (needed for `PracticeSession.tsx`, which never selects `is_correct`
+  in that path). RLS is row-level, not column-level, and this app
+  deliberately shares one Postgres role (`authenticated`) across every
+  app-level role, so a narrower residual remains: a student could still
+  read `is_correct` for a question genuinely in their OWN active
+  session by hand-crafting a raw API call outside the frontend. Closing
+  that fully needs a schema-level split (a view/RPC that never returns
+  `is_correct` to a non-privileged caller) - recorded as a known
+  residual in ROADMAP.md rather than rushed into this pass.
+- **`[CRITICAL BUG]` → fixed: `answer_keys` (the NUMERICAL-question
+  answer key) was readable by ANY lecturer, regardless of which course
+  they teach - the "LECTURER → answer-key leakage" scenario named
+  explicitly in this loop's brief.** `answer_keys_select_staff` used
+  `auth_is_staff()`, true for LECTURER with no course/authorship
+  scoping; `answer_keys_write_staff` (a `for all` policy, whose
+  `USING` clause governs SELECT too - Postgres RLS: multiple permissive
+  policies for the same command are OR'd together) independently
+  granted the identical unscoped access via `auth_has_role('LECTURER')`,
+  so both had to be fixed together - fixing only the SELECT-only policy
+  left the `for all` policy's own broader grant silently re-opening the
+  same hole, caught by re-running the regression test after the first
+  fix and seeing it still fail. Both scoped to LIBRARY_STAFF/ADMIN/
+  SUPER_ADMIN (full access) plus the question's own author or a
+  lecturer assigned to its course - no legitimate SELECT path for this
+  table exists anywhere in the API (NUMERICAL auto-marking runs through
+  the SECURITY DEFINER `mark_practice_answer()` trigger, which needs no
+  row-level grant of its own), so this fix has no residual at all.
+- **`[MISSING]` → implemented: staff/admin accounts had NO
+  per-account brute-force lockout at all**, unlike student accounts
+  (which already had `failed_login_attempts`/`locked_until` tracking).
+  `loginStaff()` never read or wrote those columns - the only defense
+  against repeated password guesses against a LECTURER/LIBRARY_STAFF/
+  ADMIN/SUPER_ADMIN account was the shared per-IP route rate limit
+  (10/minute), staying under which (or spreading guesses across IPs)
+  gave unlimited attempts against the platform's most privileged
+  accounts. Fixed by extending the same lockout mechanism to
+  `loginStaff()`, looking the profile up by `contact_email` (set to the
+  real Auth identifier at staff-account creation time) before
+  attempting sign-in, mirroring `loginStudent()`'s pattern. Regression-
+  tested: 5 failed attempts locks the account, a correct password is
+  then still rejected while locked, and a successful login resets the
+  counter.
+- **`[HARDENING]`: the internal document-processing callback's shared-
+  secret check used a plain `!==` comparison** - not constant-time, so
+  response latency could in principle leak how many leading characters
+  of a guess were correct. Fixed with a SHA-256-then-`timingSafeEqual`
+  comparison (hashing both sides first sidesteps `timingSafeEqual`'s
+  equal-length requirement without introducing a separate length-based
+  timing signal).
+- **`[HARDENING]`: `trustProxy: true` trusted an unbounded number of
+  proxy hops**, which means Fastify takes the left-most entry of a
+  client-supplied `X-Forwarded-For` header at face value - since a real
+  intermediary proxy normally *appends* its own hop rather than
+  replacing the header, an attacker could prepend an arbitrary fake IP
+  to get a "fresh" `request.ip` on every request, defeating every
+  per-IP rate limit in the app (global and the tighter auth-route ones).
+  This deploys on Render (`render.yaml`) behind exactly one reverse-
+  proxy hop, with the app unreachable except through it, so changed to
+  `trustProxy: 1` - trusts only the single Render-appended hop and
+  derives the real client IP from the actual TCP connection otherwise.
+  Not independently regression-tested: Fastify's `app.inject()` test
+  harness doesn't simulate a real proxy hop, so a test built on it
+  can't actually distinguish "protected" from "not protected" here -
+  this is a deployment-topology-dependent fix verified by inspection
+  and by Fastify/`proxy-addr`'s documented numeric-`trustProxy`
+  semantics, not by an automated test.
+- Reviewed and found already correctly enforced (no change needed):
+  CORS (explicit origin allowlist, no wildcard default), CSP/security
+  headers (`@fastify/helmet`), password-reset user-enumeration
+  (identical generic response whether or not the account exists),
+  cross-course question modification (RLS's `questions_update_own_
+  unverified`/`questions_update_staff` already block a LECTURER from
+  touching another lecturer's question - verified this is NOT also
+  reachable via the Node route layer lacking its own ownership check,
+  since RLS is the actual boundary), unpublished-paper access via the
+  download-url route (uses the RLS-scoped `request.db`, so an
+  unauthorized caller gets a 404, not a signed URL), LIBRARY_STAFF
+  reaching admin-only routes (the entire `adminRoutes` plugin is gated
+  to ADMIN/SUPER_ADMIN by a router-level `preHandler` hook - LIBRARY_
+  STAFF cannot reach any of it), and self-role-escalation to ADMIN/
+  SUPER_ADMIN (already covered by the original assertion suite).
+- New regression coverage: `rls_rbac_assertions.sql` scenario 27 (5
+  assertions - the two critical leaks above, each with both an
+  adversarial check and a same-author/course-lecturer regression check
+  proving legitimate access still works) and 2 new tests in
+  `auth.service.test.ts` for the staff lockout fix.
+- Full validation gate re-run clean after every fix: 122 Node tests (up
+  from 120), 27/27 RLS/RBAC scenarios (up from 26), 8/8 Playwright e2e,
+  16/16 Python tests + `ruff check` clean.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus

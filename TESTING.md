@@ -53,7 +53,11 @@ these tests makes a network call. Covers:
   `ACTIVE`), and `loginStudent()` rejects a `PENDING` account with a
   clear message before ever attempting a Supabase sign-in. Mocks the
   Supabase boundary (`../lib/supabase.js`) with a small fake query
-  builder rather than hitting a real project.
+  builder rather than hitting a real project. Also covers the Loop 11
+  fix for `loginStaff()`'s account lockout (previously nonexistent -
+  only `loginStudent()` had one): 5 failed sign-ins locks the account
+  and a subsequent correct password is still rejected while locked,
+  and a successful login resets `failed_login_attempts` back to 0.
 - `app.rbac.test.ts` - **HTTP-level integration tests**, the only tests
   in this project that call `buildApp()` and drive it with real
   `app.inject()` requests instead of unit-testing a middleware function
@@ -345,8 +349,22 @@ others:
   paper's `view_count`/`download_count` directly is reflected in the
   function's `total_views`/`total_downloads` aggregates on the very
   next call.
+- **A student cannot read `question_options.is_correct` for a
+  verified question outside their own practice session** (Loop 11) -
+  before this fix, ANY authenticated caller could, for ANY verified
+  question, at any time (RLS had a bare `verification_status =
+  'VERIFIED'` branch, no role/session check). A regression check in the
+  same scenario proves the student still sees `question_options` for a
+  question that IS part of their own session (no regression to the
+  practice UI).
+- **A lecturer with no relationship to a course cannot read that
+  course's `answer_keys` or `question_options.is_correct`** (Loop 11) -
+  the "LECTURER → answer-key leakage" scenario the project brief names
+  explicitly; before this fix, ANY lecturer could, for ANY course. A
+  regression check proves the course's own lecturer/question-author
+  keeps full visibility.
 
-26 scenarios in total (44 individual PASS assertions - several
+27 scenarios in total (49 individual PASS assertions - several
 scenarios cover more than one assertion each). CI runs this against a real `postgres:16-alpine` service container on
 every push/PR (`.github/workflows/ci.yml`, job `database`).
 

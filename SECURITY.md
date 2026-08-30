@@ -33,10 +33,13 @@
   'ACTIVE'` to `/account-pending` rather than rendering the app shell
   (defense in depth - the API/RLS layers are what actually matter).
 - **Failed-login lockout**: `profiles.failed_login_attempts` /
-  `locked_until` are updated in `auth.service.ts`; 5 consecutive
-  failures locks the account for 15 minutes. Error messages are
-  deliberately generic ("Invalid Student ID or password") to avoid
-  confirming which Student IDs exist.
+  `locked_until` are updated in `auth.service.ts` for both
+  `loginStudent()` and `loginStaff()` (the latter added in Loop 11 -
+  privileged accounts previously had no per-account lockout at all,
+  only the shared per-IP route rate limit); 5 consecutive failures
+  locks the account for 15 minutes. Error messages are deliberately
+  generic ("Invalid Student ID or password" / "Invalid email or
+  password") to avoid confirming which accounts exist.
 - **Privileged accounts are never self-registered.** `/api/auth/signup`
   hardcodes the STUDENT role - there is no code path where a client
   request can create a LECTURER/LIBRARY_STAFF/ADMIN/SUPER_ADMIN account.
@@ -63,7 +66,7 @@ Three independent layers, in order of how much you should trust them:
    itself validates. This is the layer that still protects the data if
    an API route's authorization check is ever missing or wrong.
    Directly exercised by `supabase/tests/rls_rbac_assertions.sql`
-   against a real Postgres instance (see TESTING.md) - 26 scenarios
+   against a real Postgres instance (see TESTING.md) - 27 scenarios
    including IDOR, IDOR-adjacent (another student's practice session),
    IDOR on the paper workflow (an unrelated lecturer, a lecturer trying
    to approve their own paper), IDOR on paper version history (a
@@ -78,8 +81,14 @@ Three independent layers, in order of how much you should trust them:
    RLS despite being callable with an explicit status filter, a student
    self-assigning their own practice-answer marks via a raw UPDATE that
    skips the content columns, a student answering (and having counted)
-   a question outside their session's own snapshot, and anonymous
-   access boundaries.
+   a question outside their session's own snapshot, anonymous
+   access boundaries, a student reading `question_options.is_correct`
+   for a verified question outside their own practice session (Loop 11
+   - previously readable by ANY authenticated caller, not just staff),
+   and a lecturer with no relationship to a course reading that
+   course's `answer_keys`/`question_options.is_correct` (Loop 11 - the
+   "LECTURER → answer-key leakage" scenario named explicitly in the
+   project brief).
 
    **RLS policy performance** (Loop 08): a policy's `auth.uid()`/
    `auth_has_role()`/`auth_is_admin()`/`auth_is_staff()` calls should be
@@ -133,15 +142,31 @@ of silently inheriting full service-role privileges. See the comment on
 
 ## Answer key confidentiality
 
-`answer_keys` and `question_options.is_correct` are never selectable by
-a STUDENT-role client, at the RLS layer (verified by the test suite)
-*and* stripped again defensively in the API's questions route before
-serialization, even though the underlying `request.db` query for a
-non-staff caller can't select `is_correct` in the first place. Grading
-happens inside a SECURITY DEFINER Postgres trigger
+`answer_keys` and `question_options.is_correct` are scoped at the RLS
+layer (verified by `rls_rbac_assertions.sql` scenario 27) to staff
+(LIBRARY_STAFF/ADMIN/SUPER_ADMIN), the question's own author, a
+lecturer assigned to its course, and - for `question_options` only - a
+caller with a legitimate `practice_session_questions` link to that
+exact question (needed for the practice UI to render option text). The
+API's questions route also strips `is_correct` from the JSON response
+defensively for any non-staff caller, but that is a secondary layer,
+not the actual boundary: table-level GRANTs are wide open (the normal
+Supabase pattern), so RLS is what actually stops a raw PostgREST/
+supabase-js call. **This was not always true** - until Loop 11,
+`question_options_select` had a bare `verification_status = 'VERIFIED'`
+branch with no role or session check at all, letting any authenticated
+caller (a plain STUDENT included) read the correct answer to any
+verified question at any time; `answer_keys` had the analogous problem
+one level narrower (any LECTURER, any course). See "Findings from
+Loop 11" in TASK.md for the full writeup, including a narrower residual
+that fix doesn't fully close (a student can still read `is_correct` for
+a question genuinely in their own active session via a hand-crafted raw
+API call, since RLS is row-level and this app shares one Postgres role
+across every app-level role) - recorded in ROADMAP.md as follow-up
+work. Grading itself happens inside a SECURITY DEFINER Postgres trigger
 (`mark_practice_answer`), which can read the answer without ever
-returning it - only the computed `is_correct`/`marks_awarded` result
-is exposed.
+returning it - only the computed `is_correct`/`marks_awarded` result is
+exposed.
 
 ## Authoritative scoring (never trust the client) - Loop 09
 
@@ -216,6 +241,16 @@ policy for staff), independent of either of the above.
   carrying a legitimate `4xx` status; a `5xx` from an unrecognized
   source still gets the generic masked message. Found and fixed while
   writing `auth.rate-limit.test.ts` (see TASK.md, Loop 03).
+- **`trustProxy: 1`, not `trustProxy: true`** (fixed in Loop 11): the
+  unbounded-hops setting let a client-supplied `X-Forwarded-For` header
+  be trusted at face value, so an attacker could prepend an arbitrary
+  fake IP to get a fresh `request.ip` (and therefore a fresh rate-limit
+  bucket) on every request - defeating every per-IP limit above,
+  global and per-route alike. `1` matches this app's actual deployment
+  topology (Render, `render.yaml`) - exactly one reverse-proxy hop, with
+  the app unreachable except through it - so only the single
+  Render-appended `X-Forwarded-For` entry is trusted, and the real
+  client IP is derived from the actual TCP connection otherwise.
 
 ## Internal service-to-service trust
 
@@ -225,12 +260,18 @@ publicly routable in production, or at minimum only accept the shared
 secret). Both directions of the handoff
 (`apps/api → POST /jobs`, `document-service → POST
 /api/internal/processing-callback`) require a shared secret header
-(`X-Internal-Secret`, compared with `hmac.compare_digest`/a direct
-equality check) configured via `DOCUMENT_SERVICE_CALLBACK_SECRET` /
-`DOCUMENT_SERVICE_SHARED_SECRET`, which must match between the two
+(`X-Internal-Secret`) configured via `DOCUMENT_SERVICE_CALLBACK_SECRET`
+/ `DOCUMENT_SERVICE_SHARED_SECRET`, which must match between the two
 services and must be a real secret in production (`change-me-in-
 production` is a placeholder, not a default meant to survive
-deployment).
+deployment). Both sides compare it in constant time - the Python side
+with `hmac.compare_digest`, and the Node side (previously a plain
+`!==`, fixed in Loop 11 - not constant-time, so response latency could
+in principle leak how many leading characters of a guess were correct)
+by hashing both sides with SHA-256 first and comparing the digests with
+`crypto.timingSafeEqual` (hashing sidesteps `timingSafeEqual`'s
+equal-length requirement without introducing its own length-based
+timing signal).
 
 ## Things this build does NOT claim
 

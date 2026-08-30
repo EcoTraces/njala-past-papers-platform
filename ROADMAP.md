@@ -14,11 +14,13 @@ recorded in this repository's commit history - not just written.
   settings).
 - RLS on every table, private Storage bucket with signed URLs,
   SECURITY DEFINER helpers, a deterministic auto-marking trigger.
-- RLS/RBAC verified against a real Postgres instance (18 scenarios,
+- RLS/RBAC verified against a real Postgres instance (27 scenarios,
   including direct storage.objects access, mass-assignment/
   self-escalation attempts, duplicate-content detection at the DB
-  constraint level, and paper-version-history IDOR probes via a
-  manually-supplied `paper_id`; see TESTING.md), not just written and
+  constraint level, paper-version-history IDOR probes via a
+  manually-supplied `paper_id`, and (Loop 11) two real answer-key-
+  leakage bugs where RLS was letting a far wider audience than intended
+  read the actual correct answer; see TESTING.md), not just written and
   hoped-for.
 
 **Backend**
@@ -139,6 +141,26 @@ recorded in this repository's commit history - not just written.
   checksum-based unique-index duplicate prevention is not built as a
   distinct workflow.
 
+**Known residual risk (Loop 11)**
+- After Loop 11's fix, a student can still read `question_options.
+  is_correct` for a question genuinely part of their OWN active
+  practice session by hand-crafting a raw PostgREST/supabase-js call
+  outside the frontend (which never requests that column in the
+  legitimate path) - the systemic "any verified question, any time, any
+  caller" version of this leak is closed, but this narrower one isn't.
+  Postgres RLS is row-level, not column-level, and this app
+  deliberately shares one Postgres role (`authenticated`) across every
+  app-level role, so a row visible enough for `PracticeSession.tsx` to
+  render option text is also a row where `is_correct` is technically
+  selectable by that same caller. Fully closing this needs a
+  schema-level split - e.g. a `security_invoker` view or RPC exposed to
+  PostgREST that only ever returns `id`/`option_label`/`option_text`/
+  `order_index`, with the raw `question_options` table's own RLS
+  tightened to staff/author/course-lecturer only (no session-participant
+  branch at all) - deliberately not rushed into a single hardening pass
+  without the same kind of realistic testing every other fix in this
+  project got.
+
 **Testing depth**
 - No e2e coverage for flows that require a real account (login,
   upload, practice, review) - would need a seeded Supabase test
@@ -163,3 +185,7 @@ recorded in this repository's commit history - not just written.
 4. Build the `paper_versions` replace-file UI (API is ready) and the
    `paper_categories` tagging feature (API and UI both still missing).
 5. Add exportable reports/time-series trends to the analytics page.
+6. Close the known residual risk from Loop 11 (see above): split
+   `question_options` into a safe view/RPC so a student's own active
+   practice session can never expose `is_correct` even via a raw API
+   call, not just through the frontend.
