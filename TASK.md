@@ -133,6 +133,44 @@ source rather than trusting the earlier audit:
   `tsconfig.build.json`'s exclude list so this new test-only helper
   doesn't end up in the production build output either.
 
+## Findings from Loop 05 (frontend audit)
+
+- **`[UI BUG]` → fixed: the public-page header overflowed horizontally
+  on mobile.** A manual responsive audit - real Playwright screenshots
+  at 375px/768px/1440px viewports, not just trusting the Tailwind
+  classes - found that `Landing.tsx`'s header had zero responsive
+  treatment: "About Help Contact Sign in Create student account" all
+  sat in one flex row with `gap-4`, which at 375px forced the row (and
+  therefore the whole page) wider than the viewport, wrapping the logo
+  onto three lines and leaving a horizontal-scroll/empty-margin
+  artifact on every page sharing that header (landing, about, help,
+  contact all use it via `StaticPage`/`Landing`). Fixed: the secondary
+  links (About/Help/Contact) are hidden below `sm:`, and the primary
+  CTA switches to a shorter "Sign up" label. Verified by a before/after
+  screenshot comparison and a new regression test,
+  `e2e/responsive-layout.spec.ts`, which asserts
+  `document.documentElement.scrollWidth <= window.innerWidth` at both
+  a mobile and a desktop viewport.
+- **`[MISSING]` → added: the Analytics page.** `GET /api/analytics`
+  has existed since the initial build, but nothing in the frontend
+  ever called it - `recharts` was an unused dependency. Added
+  `/app/analytics` (ADMIN/SUPER_ADMIN/LIBRARY_STAFF, matching the
+  API's own permission) rendering real bar charts of the most-viewed
+  and most-downloaded papers. Code-split via `React.lazy` +
+  `Suspense`, since pulling in Recharts had pushed the main JS bundle
+  from ~630KB to over 1MB - it's now split into its own ~375KB chunk
+  loaded only when a privileged user actually visits the page.
+- **No placeholder buttons or fake functionality found.** Grepped for
+  "Coming soon", "not yet implemented", disabled-with-no-explanation
+  buttons, and TODO markers across `apps/web/src` - none.
+- Deliberately **not** manually re-verified: the authenticated app
+  shell (student/lecturer/library/admin dashboards and every page
+  behind `ProtectedRoute`) at mobile/tablet viewports, since that needs
+  a live Supabase project to sign in against, which this environment
+  doesn't have. The app shell's own mobile nav (a hamburger-collapsed
+  drawer, distinct from and already more careful than the public
+  header that had the bug above) wasn't touched in this pass.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -152,11 +190,11 @@ from a clean checkout.
 | Admin: dashboard/users/academic structure/audit logs | `[COMPLETE]` | |
 | Role-based route protection | `[COMPLETE]` | UX layer only, by design - see SECURITY.md |
 | Loading/empty/error states | `[COMPLETE]` | `Spinner`/`PageSpinner`/`EmptyState` used consistently; every mutation surfaces `ApiError.message` |
-| Responsive layout | `[PARTIAL]` | Tailwind responsive utilities used throughout (`sm:`/`lg:` breakpoints on grids/nav); not manually verified at tablet/mobile viewport in a real browser this session - see Loop 05 |
-| Charts (Recharts) | `[MISSING]` | Dependency installed, not wired to any screen - `/api/analytics` data is rendered as plain lists today |
+| Responsive layout | `[COMPLETE]` | Manually verified with real screenshots at 375px/768px/1440px (see Loop 05) - found and fixed a real bug: the public-page header had no responsive treatment and overflowed horizontally on mobile |
+| Charts (Recharts) | `[COMPLETE]` | New `/app/analytics` page (ADMIN/SUPER_ADMIN/LIBRARY_STAFF) renders real bar charts from `/api/analytics`'s most-viewed/most-downloaded paper data, code-split via `React.lazy` so the heavy Recharts dependency doesn't bloat the main bundle |
 | Paper version replace-file UI | `[MISSING]` | `paper_versions` table + nothing on top of it in the API/UI |
 | Paper category tagging UI | `[MISSING]` | `paper_categories`/`paper_category_links` tables exist, no UI |
-| Bundle size | `[technical debt]` | Single ~630KB JS chunk, no route-based code-splitting yet |
+| Bundle size | `[technical debt]` | Main chunk is ~630KB (Analytics/Recharts is now split out at ~375KB, loaded only when visited); the remaining main chunk still exceeds Vite's 500KB warning and would benefit from further route-splitting (e.g. the PDF viewer route, admin routes) |
 
 ## Backend — `apps/api`
 
@@ -209,7 +247,7 @@ from a clean checkout.
 | `packages/shared` unit | `[COMPLETE]` | 19 |
 | `apps/api` unit + integration | `[COMPLETE]` | 57 (27 original + 2 activation-gate + 15 admin/academic RBAC HTTP-integration + 1 rate-limit + 12 paper/question/practice RBAC HTTP-integration) |
 | `apps/web` unit | `[PARTIAL]` | 2 - only `StatusBadge`; no coverage of hooks/pages yet |
-| `apps/web` e2e (Playwright) | `[PARTIAL]` | 6, public-routes-only; no authenticated-flow e2e (needs a seeded Supabase test project) |
+| `apps/web` e2e (Playwright) | `[PARTIAL]` | 8, public-routes-only (incl. 2 responsive-layout regression tests added in Loop 05); no authenticated-flow e2e (needs a seeded Supabase test project) |
 | `apps/document-service` (pytest) | `[COMPLETE]` | 4 |
 | DB RLS/RBAC (`supabase/tests/`) | `[COMPLETE]` | 15 scenarios: the original 11 plus direct storage.objects access, lecturer course-ownership self-assignment, and mass-assignment-via-UPDATE (`uploaded_by` reassignment) |
 
@@ -221,7 +259,7 @@ from a clean checkout.
 4. ~~Loop 02: add a direct `storage.objects` RLS test; add course-lecturer-ownership and manipulated-parameter scenarios to the assertion suite.~~ **done**
 5. ~~Loop 03: add `app.inject()`-based HTTP integration tests proving the exact attack scenarios listed in the brief; add a stricter rate limit on `/api/auth/*`.~~ **done - also found and fixed two real bugs (app couldn't boot; 429s were masked as 500s) that only surfaced once something finally booted the real app**
 6. ~~Loop 04: confirm every module is real; no orphan routes.~~ **done - confirmed, and extended RBAC HTTP-integration coverage to the paper/question/practice modules (12 more tests)**
-7. Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; consider route-based code splitting for the JS bundle.
+7. ~~Loop 05: manual responsive check at 3 breakpoints; wire Recharts into the admin analytics view; code-split the resulting bundle.~~ **done - found and fixed a real mobile header overflow bug along the way**
 8. Backlog (not this pass): paper-version replace-file UI, category tagging UI, real transactional email provider, authenticated e2e against a seeded test project, live deployment.
 
 ## Verification (this pass)
@@ -232,5 +270,5 @@ npm run typecheck        # shared, api, web - clean
 npm run lint              # api, web - clean
 npm run test               # shared 19, api 57, web 2 - all passing (78 total)
 bash scripts/db-test-setup.sh && bash scripts/db-test-assertions.sh   # 15/15 RLS/RBAC scenarios passing, fresh DB
-npx playwright test        # 6/6 e2e passing
+npx playwright test        # 8/8 e2e passing
 ```

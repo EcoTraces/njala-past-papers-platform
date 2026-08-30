@@ -5,14 +5,17 @@ export function Landing(): JSX.Element {
   return (
     <div className="min-h-screen bg-white">
       <header className="border-b border-slate-200">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
-          <span className="text-lg font-bold text-brand-700">Njala Past Papers</span>
-          <nav className="flex items-center gap-4 text-sm font-medium text-slate-600">
-            <Link to="/about" className="hover:text-slate-900">About</Link>
-            <Link to="/help" className="hover:text-slate-900">Help</Link>
-            <Link to="/contact" className="hover:text-slate-900">Contact</Link>
-            <Link to="/login" className="btn-secondary">Sign in</Link>
-            <Link to="/signup" className="btn-primary">Create student account</Link>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-4">
+          <span className="shrink-0 text-lg font-bold text-brand-700">Njala Past Papers</span>
+          <nav className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-600 sm:gap-4">
+            <Link to="/about" className="hidden hover:text-slate-900 sm:inline">About</Link>
+            <Link to="/help" className="hidden hover:text-slate-900 sm:inline">Help</Link>
+            <Link to="/contact" className="hidden hover:text-slate-900 sm:inline">Contact</Link>
+            <Link to="/login" className="btn-secondary shrink-0 px-3 sm:px-4">Sign in</Link>
+            <Link to="/signup" className="btn-primary shrink-0 whitespace-nowrap px-3 sm:px-4">
+              <span className="sm:hidden">Sign up</span>
+              <span className="hidden sm:inline">Create student account</span>
+            </Link>
           </nav>
         </div>
       </header>

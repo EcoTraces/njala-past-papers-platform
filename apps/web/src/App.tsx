@@ -1,6 +1,8 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { AppLayout } from './components/AppLayout';
 import { ProtectedRoute } from './routes/ProtectedRoute';
+import { PageSpinner } from './components/Spinner';
 
 import { Landing } from './pages/public/Landing';
 import { Login } from './pages/public/Login';
@@ -34,6 +36,12 @@ import { ReviewQueue } from './pages/library/ReviewQueue';
 import { AdminUsers } from './pages/admin/AdminUsers';
 import { AcademicStructure } from './pages/admin/AcademicStructure';
 import { AuditLogs } from './pages/admin/AuditLogs';
+
+// Lazy-loaded: Recharts alone is a large dependency, and Analytics is
+// used by a small subset of privileged users - splitting it out of
+// the main bundle keeps the initial load (landing/login/signup, which
+// every visitor hits) fast for everyone else.
+const Analytics = lazy(() => import('./pages/admin/Analytics').then((m) => ({ default: m.Analytics })));
 
 export function App(): JSX.Element {
   return (
@@ -167,6 +175,16 @@ export function App(): JSX.Element {
           element={
             <ProtectedRoute roles={['ADMIN', 'SUPER_ADMIN']}>
               <AuditLogs />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="analytics"
+          element={
+            <ProtectedRoute roles={['ADMIN', 'SUPER_ADMIN', 'LIBRARY_STAFF']}>
+              <Suspense fallback={<PageSpinner />}>
+                <Analytics />
+              </Suspense>
             </ProtectedRoute>
           }
         />

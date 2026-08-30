@@ -14,6 +14,7 @@ import {
   Users,
   Building2,
   ShieldCheck,
+  BarChart3,
   LogOut,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -44,6 +45,9 @@ function navForRoles(roles: string[]): NavItem[] {
     items.push({ to: '/app/admin/users', label: 'Users', icon: Users });
     items.push({ to: '/app/admin/academic', label: 'Academic Structure', icon: Building2 });
     items.push({ to: '/app/admin/audit-logs', label: 'Audit Logs', icon: ShieldCheck });
+  }
+  if (roles.includes('ADMIN') || roles.includes('SUPER_ADMIN') || roles.includes('LIBRARY_STAFF')) {
+    items.push({ to: '/app/analytics', label: 'Analytics', icon: BarChart3 });
   }
   items.push({ to: '/app/notifications', label: 'Notifications', icon: Bell });
   items.push({ to: '/app/profile', label: 'Profile', icon: User });

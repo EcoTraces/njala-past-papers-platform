@@ -158,3 +158,37 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   imported and registered in `app.ts` - no orphan/fake route files.
 - 78 total unit/integration tests passing (19 shared + 57 api + 2
   web); full monorepo build/typecheck/lint clean.
+
+## [Unreleased] - Frontend audit (Loop 05)
+
+### Fixed
+
+- **The public-page header overflowed horizontally on mobile.** A
+  manual responsive audit using real Playwright screenshots at
+  375px/768px/1440px (not just trusting the Tailwind classes) found
+  `Landing.tsx`'s header had no responsive treatment: five nav items
+  in one unbreaking flex row forced the row - and the whole page -
+  wider than a 375px viewport, wrapping the logo onto three lines and
+  leaving a horizontal-scroll artifact on every page sharing that
+  header. Fixed: secondary links hidden below `sm:`, primary CTA
+  shortened to "Sign up" on mobile. Regression-tested in
+  `e2e/responsive-layout.spec.ts`.
+
+### Added
+
+- `/app/analytics` (ADMIN/SUPER_ADMIN/LIBRARY_STAFF): real Recharts
+  bar charts of the most-viewed and most-downloaded papers from
+  `GET /api/analytics`, which had existed since the initial build with
+  nothing in the frontend ever calling it. Code-split via
+  `React.lazy`/`Suspense` - Recharts had pushed the main JS bundle from
+  ~630KB to over 1MB, so it's now its own ~375KB chunk loaded only when
+  visited.
+- `e2e/responsive-layout.spec.ts` (2 scenarios).
+
+### Verified
+
+- Grepped `apps/web/src` for placeholder/fake-functionality patterns
+  ("Coming soon", TODO markers, disabled-with-no-explanation buttons) -
+  none found.
+- 8/8 e2e passing (up from 6); full monorepo build/typecheck/lint
+  clean.

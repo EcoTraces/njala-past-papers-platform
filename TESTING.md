@@ -125,12 +125,16 @@ Playwright's CDN).
 
 Current coverage is deliberately scoped to what needs **no backend**:
 public navigation (landing → login tabs, sign-up client-side
-validation, 404) and the auth-guard redirect (`/app` and nested
-protected routes → `/login` while signed out). Flows that need a real
-account (login, upload, practice, review workflow) need a seeded
-Supabase test project; wiring those up is a natural next step once a
-dedicated test project exists (point `E2E_BASE_URL` at a deployed
-preview and add spec files that sign in via the UI).
+validation, 404), the auth-guard redirect (`/app` and nested protected
+routes → `/login` while signed out), and responsive layout
+(`responsive-layout.spec.ts`: the landing page must not overflow
+horizontally at a 375px mobile viewport, and must show the full
+desktop nav at 1440px - a regression test for a real bug found during
+a manual screenshot audit, see TASK.md "Findings from Loop 05"). Flows
+that need a real account (login, upload, practice, review workflow)
+need a seeded Supabase test project; wiring those up is a natural next
+step once a dedicated test project exists (point `E2E_BASE_URL` at a
+deployed preview and add spec files that sign in via the UI).
 
 ## apps/document-service - unit tests (pytest)
 

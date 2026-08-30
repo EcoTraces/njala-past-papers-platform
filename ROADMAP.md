@@ -85,9 +85,10 @@ recorded in this repository's commit history - not just written.
   support exist; there's no frontend screen for replacing a file with
   a new version or managing category tags yet).
 - Analytics is limited to what `/api/analytics` and the dashboards
-  expose (most-viewed/downloaded papers, basic counts) - no charting
-  library wired up in the frontend yet (Recharts is a dependency but
-  unused so far), no exportable reports.
+  expose (most-viewed/downloaded papers, basic counts). A dedicated
+  `/app/analytics` page now renders this as real Recharts bar charts
+  (code-split so the dependency doesn't bloat the main bundle) - still
+  no exportable reports or time-series trends.
 - No dedicated "Help"/support ticketing beyond the static Help/Contact
   pages.
 - Content moderation / duplicate-record management beyond the
@@ -114,4 +115,4 @@ recorded in this repository's commit history - not just written.
    cover authenticated flows end-to-end.
 4. Build the `paper_versions` replace-file UI and `paper_categories`
    tagging UI.
-5. Wire Recharts into the admin analytics dashboard.
+5. Add exportable reports/time-series trends to the analytics page.
