@@ -153,6 +153,20 @@ these tests makes a network call. Covers:
   and tearing down a fresh app instance per test (via `vi.doMock` +
   `vi.resetModules()`) so each scenario gets its own fake user/role/
   fixture without cross-test bleed.
+- `questions.routes.test.ts` (Loop 12) - previously zero coverage on
+  this route file. Proves `stripAnswers()` (the app-layer half of the
+  answer-key-leakage defense Loop 11 found real RLS-layer bugs in)
+  actually strips `question_options.is_correct` from both `GET /` and
+  `GET /:id` for a STUDENT and leaves it intact for a LECTURER, and
+  that `POST /:id/verify` both sets `VERIFIED`/`verified_by` correctly
+  on success and rejects a request missing the required boolean
+  `approve` field with a real 4xx that leaves the row untouched.
+- `notifications.routes.test.ts` (Loop 12) - previously zero coverage
+  on this route file. Covers the ordinary list/mark-read/mark-all-read
+  paths plus one real IDOR check: `PATCH /:id/read` on another user's
+  notification id can never succeed (the route's own `.eq('user_id',
+  callerId)` on top of RLS), and the target row is proven untouched
+  regardless of what status code comes back.
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are
@@ -185,16 +199,24 @@ Playwright's CDN).
 
 Current coverage is deliberately scoped to what needs **no backend**:
 public navigation (landing → login tabs, sign-up client-side
-validation, 404), the auth-guard redirect (`/app` and nested protected
-routes → `/login` while signed out), and responsive layout
-(`responsive-layout.spec.ts`: the landing page must not overflow
-horizontally at a 375px mobile viewport, and must show the full
-desktop nav at 1440px - a regression test for a real bug found during
-a manual screenshot audit, see TASK.md "Findings from Loop 05"). Flows
-that need a real account (login, upload, practice, review workflow)
-need a seeded Supabase test project; wiring those up is a natural next
-step once a dedicated test project exists (point `E2E_BASE_URL` at a
-deployed preview and add spec files that sign in via the UI).
+validation, 404), login-form client-side validation
+(`login-validation.spec.ts`, Loop 12 - empty student/staff submissions
+and a malformed staff email are all rejected by `zodResolver` before
+any network call is attempted, so this needs no backend either), the
+auth-guard redirect (`/app` and nested protected routes → `/login`
+while signed out), and responsive layout (`responsive-layout.spec.ts`:
+the landing page must not overflow horizontally at a 375px mobile
+viewport, and must show the full desktop nav at 1440px - a regression
+test for a real bug found during a manual screenshot audit, see
+TASK.md "Findings from Loop 05"). Flows that need a real account
+(login, upload, practice, review workflow) need a seeded Supabase test
+project - confirmed still genuinely out of reach in Loop 12: `apps/api`
+signs in via Supabase Auth's hosted GoTrue service over HTTPS, and
+`playwright.config.ts`'s `webServer` only starts a static frontend
+build with no API process at all, so there's no backend for such a
+test to even talk to in this environment. Wiring those up is a natural
+next step once a dedicated test project exists (point `E2E_BASE_URL`
+at a deployed preview and add spec files that sign in via the UI).
 
 ## apps/document-service - unit tests (pytest)
 

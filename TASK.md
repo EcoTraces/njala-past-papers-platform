@@ -699,6 +699,68 @@ source rather than trusting the earlier audit:
   from 120), 27/27 RLS/RBAC scenarios (up from 26), 8/8 Playwright e2e,
   16/16 Python tests + `ruff check` clean.
 
+## Findings from Loop 12 (complete QA and testing)
+
+- **`[MISSING]` → implemented: `questions.routes.ts` and
+  `notifications.routes.ts` had zero test coverage at all**, despite
+  `questions.routes.ts` carrying the app-layer half of the answer-key-
+  leakage defense (`stripAnswers()`) this same audit pass found real
+  RLS-layer bugs in (Loop 11) - a regression there could have silently
+  stopped stripping `is_correct` from the JSON response with nothing to
+  catch it. Added `questions.routes.test.ts` (5 tests: `is_correct` is
+  stripped from both `GET /` and `GET /:id` for a STUDENT and NOT
+  stripped for a LECTURER; `POST /:id/verify` correctly sets
+  `VERIFIED`/`verified_by` on `approve: true`; the same endpoint
+  rejects a request missing the required boolean `approve` field with a
+  real 4xx and, critically, leaves the row completely untouched rather
+  than silently doing nothing or half-applying the update) and
+  `notifications.routes.test.ts` (4 tests: `GET /` only ever returns
+  the caller's own rows; `PATCH /:id/read` marks the caller's own
+  notification read; the same route on another user's notification id
+  is an IDOR check - the row-scoped `.eq('user_id', callerId')` means it
+  can never succeed, verified the target row is left untouched
+  regardless of what status code comes back; `POST /read-all` only
+  touches the caller's own unread rows).
+- **`[MISSING]` → implemented: no e2e coverage existed for any
+  client-side-only login-form failure scenario** - `public-
+  navigation.spec.ts` already covered the equivalent for signup, but
+  nothing for login. Added `login-validation.spec.ts` (3 tests): an
+  empty student-tab submission and an empty staff-tab submission both
+  show a validation error and never navigate away from `/login`
+  (react-hook-form's `zodResolver` blocks the network call entirely
+  until validation passes, so - like the existing signup test - these
+  run against the built app with no backend required); a malformed
+  email on the staff tab is rejected the same way before any
+  submission is attempted.
+- **Investigated and confirmed genuinely out of reach in this
+  environment, not simply skipped**: full authenticated role-journey
+  Playwright coverage (STUDENT login→search→practice→submit→result;
+  LECTURER login→upload→submit→manage questions; LIBRARY login→
+  review→approve→publish; ADMIN login→manage users→manage courses→
+  audit logs), per the brief. `apps/api`'s `loginStudent()`/
+  `loginStaff()` call Supabase Auth's hosted GoTrue service over HTTPS
+  (`supabaseAdmin.auth.signInWithPassword`) - not the bare Postgres
+  instance this project's test harness runs locally, which has no
+  GoTrue/PostgREST/Kong stack in front of it. Confirmed by reading
+  `apps/web/playwright.config.ts`: the e2e suite's `webServer` only
+  starts `npm run preview` (a static build of the frontend, no API
+  process at all), consistent with the pre-existing, still-accurate
+  docstring in `public-navigation.spec.ts` and the "Testing depth" /
+  "Suggested next steps" sections of ROADMAP.md, both of which already
+  named this as needing a real, seeded Supabase test project wired into
+  CI - not attempted here without one, rather than faked with a
+  misleading mock that wouldn't actually prove anything.
+- Reviewed the RBAC-rejection test files (`app.rbac.test.ts`,
+  `papers.rbac.test.ts`) to confirm no duplicate coverage before adding
+  the above - both already thoroughly cover "an unauthorized role is
+  rejected" across every route file; the gap was specifically in
+  "what happens once a request IS authorized," which is what this
+  loop's new tests cover instead.
+- Full validation gate re-run clean: 131 Node tests (up from 122),
+  27/27 RLS/RBAC scenarios (unchanged - no schema/policy changes this
+  loop), 11/11 Playwright e2e (up from 8), 16/16 Python tests +
+  `ruff check` clean, production build clean.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus

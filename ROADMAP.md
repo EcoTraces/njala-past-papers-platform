@@ -164,7 +164,16 @@ recorded in this repository's commit history - not just written.
 **Testing depth**
 - No e2e coverage for flows that require a real account (login,
   upload, practice, review) - would need a seeded Supabase test
-  project wired into CI.
+  project wired into CI. Re-confirmed in Loop 12, not just carried
+  forward as an assumption: `apps/api` signs in via Supabase Auth's
+  hosted GoTrue service over HTTPS, and the Playwright `webServer`
+  config only starts a static frontend build with no API process at
+  all, so there's genuinely no backend for such a test to talk to in
+  this environment yet. What Loop 12 *could* add without one - more
+  client-side-only failure-scenario coverage (`login-validation.spec.ts`)
+  and HTTP-level tests for the two previously-untested route files
+  (`questions.routes.test.ts`, `notifications.routes.test.ts`) - was
+  added.
 - No load/performance testing.
 - No automatic recovery for a failed *callback* specifically (the
   Python service finishes processing successfully, but the POST back

@@ -532,3 +532,43 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   `auth.service.test.ts` tests for the staff lockout fix.
 - 122 Node tests (up from 120), 27/27 RLS/RBAC scenarios (up from 26),
   8/8 Playwright e2e, 16/16 Python tests + `ruff check` clean.
+
+## [Unreleased] - Complete QA and testing (Loop 12)
+
+### Added
+
+- `questions.routes.test.ts` (5 tests): `stripAnswers()` actually
+  strips `question_options.is_correct` from both `GET /` and
+  `GET /:id` for a STUDENT and leaves it intact for a LECTURER;
+  `POST /:id/verify` sets `VERIFIED`/`verified_by` correctly and
+  rejects a request missing the required boolean `approve` field with a
+  real 4xx (leaving the row untouched) rather than silently doing
+  nothing or a masked 500. Previously zero coverage on this route file,
+  despite it carrying the app-layer half of the answer-key-leakage
+  defense Loop 11 found real RLS-layer bugs in.
+- `notifications.routes.test.ts` (4 tests): list/mark-read/mark-all-
+  read, including an IDOR check that `PATCH /:id/read` on another
+  user's notification id can never succeed and leaves their row
+  untouched. Previously zero coverage on this route file.
+- `login-validation.spec.ts` (3 Playwright tests): empty student/staff
+  login submissions show a validation error and never navigate away
+  from `/login`; a malformed staff email is rejected before any
+  submission. Entirely client-side (`zodResolver` blocks the network
+  call), so no backend is required - mirrors the existing signup-form
+  validation test.
+
+### Investigated
+
+- Full authenticated role-journey e2e coverage (login→search→practice→
+  submit→result and the equivalent for LECTURER/LIBRARY/ADMIN) remains
+  out of reach in this environment: `loginStudent()`/`loginStaff()`
+  call Supabase Auth's hosted GoTrue service over HTTPS, which the
+  local Postgres-only test harness has no stand-in for, and the e2e
+  `webServer` config only starts a static frontend build with no API
+  process. Documented, not faked - see TASK.md/ROADMAP.md.
+
+### Verified
+
+- 131 Node tests (up from 122), 27/27 RLS/RBAC scenarios (unchanged),
+  11/11 Playwright e2e (up from 8), 16/16 Python tests + `ruff check`
+  clean, production build clean.
