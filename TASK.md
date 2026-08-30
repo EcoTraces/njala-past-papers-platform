@@ -514,6 +514,76 @@ source rather than trusting the earlier audit:
   can never set their own marks_awarded/is_correct by hand" - the
   schema didn't actually enforce).
 
+## Findings from Loop 10 (dashboards and analytics: real data, no placeholders)
+
+- **`[MISSING]` → implemented: the admin dashboard never reported
+  active users, total views, total downloads, or total practice
+  attempts** - all four are explicitly called out in the brief, and the
+  route only ever returned `totalUsers`/`totalPapers`/`totalCourses`/
+  `pendingApprovals`. `SUM(view_count)`/`SUM(download_count)` across
+  the whole catalogue and a `COUNT` of `SUBMITTED` practice sessions
+  can't be expressed through PostgREST's plain filter/select interface
+  any more than `ts_rank()` could in Loop 08 - fixed the same way, with
+  a dedicated `admin_dashboard_stats()` SQL function
+  (`20260101000019_admin_dashboard_stats.sql`, SECURITY INVOKER so RLS
+  still governs what a non-admin caller could see if they somehow
+  reached it - the route itself is ADMIN/SUPER_ADMIN-gated). `active_users`
+  filters on `status = 'ACTIVE'`, not a bare `count(*)` over `profiles`
+  - verified with a regression test (`rls_rbac_assertions.sql` scenario
+  26) that inserting a `SUSPENDED` account does not move the number.
+- **`[MISSING]` → implemented: the student dashboard had no
+  performance/progress summary or recommendations**, both explicit
+  brief items. `performance` is a genuine average over *all* the
+  student's `SUBMITTED` sessions (not just the 5 shown in "recent
+  attempts" - averaging only the recent slice would silently under- or
+  over-represent a student with more than 5 attempts).
+  `recommendations` is deliberately simple and honestly derived (recent
+  published papers in the student's own department, excluding papers
+  already bookmarked) rather than a fake/hardcoded list - returns `[]`
+  when the student's `department_id` is null instead of guessing or
+  erroring (regression-tested).
+- **`[MISSING]` → implemented: the lecturer dashboard had no practice
+  statistics or pending-actions summary.** `practiceStatistics` averages
+  `SUBMITTED` sessions across the lecturer's own courses;
+  `pendingActions` surfaces `unverifiedQuestions` and a new
+  `draftPapers` count. A lecturer with zero assigned courses must not
+  reach `practice_sessions` with an empty `.in()` filter (undefined
+  behavior to rely on) - guarded with an explicit `courseIds.length > 0`
+  check and regression-tested that `practice_sessions` is never queried
+  in that case.
+- **`[MISSING]` → implemented: the library dashboard had no catalogue
+  statistics** (`totalPapers`/`totalPublished`/`totalCourses`, all via
+  cheap `{ count: 'exact', head: true }` queries - no row data
+  transferred).
+- **`[BUG]` → fixed: `/api/analytics`'s upload count was the length of
+  a capped 500-row fetch, not a real count.** Selected up to 500 full
+  `created_at` values from `examination_papers` just to read
+  `.length` off the array - wasteful (transfers real row data purely to
+  discard it) and silently wrong once the catalogue exceeds 500 papers
+  (further growth invisible, and the field was misleadingly labelled a
+  "sample" in the UI to paper over it). Replaced with two genuine
+  `{ count: 'exact', head: true }` queries - `totalUploads` (all-time)
+  and `uploadsLast30Days` - which return an exact count without
+  transferring any rows, so the numbers stay correct at any scale.
+- All new/changed dashboard fields wired into their pages
+  (`StudentDashboard.tsx`, `LecturerDashboard.tsx`,
+  `LibraryDashboard.tsx`, `AdminDashboard.tsx`, `Analytics.tsx`) -
+  nothing added to the API response was left unrendered.
+- Role gating reviewed for every new field: `admin_dashboard_stats()`
+  and `recentActivity` (an `audit_logs` join) are reachable only via
+  `GET /api/admin/dashboard` (ADMIN/SUPER_ADMIN); student `performance`/
+  `recommendations` only ever read the calling student's own rows
+  (`eq('user_id', userId)`/session-derived); no new field exposes
+  another user's private data.
+- New regression coverage: `dashboard.routes.test.ts` (5 HTTP-level
+  tests - the empty-course-list branch, a real averaged-score
+  computation, the null-department recommendations branch, an
+  `admin_dashboard_stats()` RPC error surfacing as a real 500 rather
+  than defaulting stats to zero, and the analytics count-vs-sample
+  fix) and `rls_rbac_assertions.sql` scenario 26 (`admin_dashboard_stats()`
+  reflects real aggregate data and correctly excludes a `SUSPENDED`
+  account from `active_users`).
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -530,11 +600,11 @@ from a clean checkout.
 | Student: dashboard/browse/search/detail/PDF preview/download/bookmark/practice/results/attempts/notifications/profile | `[COMPLETE]` | PDF preview is an iframe against a signed URL (native browser rendering), not a custom PDF.js canvas viewer - see ROADMAP.md. Browse/search gained real course/examination-type/academic-year/semester filters and a working relevance sort this pass (Loop 08) - previously only a keyword box and recent/popular/title sort buttons existed |
 | Lecturer: dashboard/my papers/upload/question bank | `[COMPLETE]` | |
 | Library: dashboard/review queue/upload | `[COMPLETE]` | |
-| Admin: dashboard/users/academic structure/audit logs | `[COMPLETE]` | |
+| Admin: dashboard/users/academic structure/audit logs | `[COMPLETE]` | Admin dashboard now renders `activeUsers`/`totalViews`/`totalDownloads`/`totalPracticeAttempts`/`recentActivity` (Loop 10), not just the original four counters |
 | Role-based route protection | `[COMPLETE]` | UX layer only, by design - see SECURITY.md |
 | Loading/empty/error states | `[COMPLETE]` | `Spinner`/`PageSpinner`/`EmptyState` used consistently; every mutation surfaces `ApiError.message` |
 | Responsive layout | `[COMPLETE]` | Manually verified with real screenshots at 375px/768px/1440px (see Loop 05) - found and fixed a real bug: the public-page header had no responsive treatment and overflowed horizontally on mobile |
-| Charts (Recharts) | `[COMPLETE]` | New `/app/analytics` page (ADMIN/SUPER_ADMIN/LIBRARY_STAFF) renders real bar charts from `/api/analytics`'s most-viewed/most-downloaded paper data, code-split via `React.lazy` so the heavy Recharts dependency doesn't bloat the main bundle |
+| Charts (Recharts) | `[COMPLETE]` | New `/app/analytics` page (ADMIN/SUPER_ADMIN/LIBRARY_STAFF) renders real bar charts from `/api/analytics`'s most-viewed/most-downloaded paper data, code-split via `React.lazy` so the heavy Recharts dependency doesn't bloat the main bundle. Upload count now a real `totalUploads`/`uploadsLast30Days` pair from an exact-count query, not a capped-sample length (Loop 10) |
 | Paper version replace-file UI | `[MISSING]` | API now supports it (`GET`/`POST /api/papers/:id/versions`, Loop 06) - no frontend screen yet |
 | Paper category tagging UI | `[MISSING]` | `paper_categories`/`paper_category_links` tables exist, no UI |
 | Bundle size | `[technical debt]` | Main chunk is ~630KB (Analytics/Recharts is now split out at ~375KB, loaded only when visited); the remaining main chunk still exceeds Vite's 500KB warning and would benefit from further route-splitting (e.g. the PDF viewer route, admin routes) |
@@ -549,7 +619,7 @@ from a clean checkout.
 | Paper workflow (upload/submit/review/approve/publish/reject/archive/delete/download/bookmark/version-replace) | `[COMPLETE]` | State machine enforced in code + RLS; unit-tested. Versioning added Loop 06: `GET`/`POST /:id/versions`, three-independent-check upload validation (MIME/extension/magic-bytes), orphaned-storage-object cleanup, duplicate-content 409s |
 | Question bank (create/read/update/verify/delete) | `[COMPLETE]` | Answer/`is_correct` stripped for non-staff at the route layer (defense in depth on top of RLS) |
 | Practice (sessions/answers/pause/resume/submit/manual marking) | `[COMPLETE]` | Deterministic, server-only auto-marking verified at the DB layer; Loop 09 found and fixed three real integrity bugs (score self-assignment, out-of-snapshot answers, manual marking never working) and implemented real `time_spent_seconds` tracking - see "Findings from Loop 09" |
-| Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Analytics is basic (counts, top lists) - no time-series/export |
+| Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Loop 10 added real performance/recommendations (student), practice statistics/pending-actions (lecturer), catalogue stats (library), and active-users/views/downloads/practice-attempts/recent-activity (admin), backed by a new `admin_dashboard_stats()` RPC - see "Findings from Loop 10". Analytics is still basic (counts, top lists) - no time-series/export |
 | Notifications (list/mark-read/mark-all-read) | `[COMPLETE]` | Creation is system-only (no client insert), by design |
 | Admin (users/staff provisioning/status/roles/audit logs/system settings) | `[COMPLETE]` | |
 | Internal processing callback | `[COMPLETE]` | Shared-secret guarded, not a Fastify-auth route by design. Handles `QUEUED`→`PROCESSING`→`COMPLETED`/`FAILED` (Loop 07); automatically re-queues a bounded number of recoverable failures |

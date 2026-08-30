@@ -10,6 +10,8 @@ interface LecturerDashboardResponse {
   myPapers: Array<{ id: string; title: string; status: PaperStatus }>;
   myCourses: Array<{ id: string; code: string; title: string }>;
   questionBankStats: { total: number; verified: number; pending: number };
+  practiceStatistics: { totalAttempts: number; averagePercentage: number | null };
+  pendingActions: { unverifiedQuestions: number; draftPapers: number };
 }
 
 export function LecturerDashboard(): JSX.Element {
@@ -33,7 +35,18 @@ export function LecturerDashboard(): JSX.Element {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Questions authored" value={data.questionBankStats.total} />
         <StatCard label="Verified" value={data.questionBankStats.verified} />
-        <StatCard label="Pending verification" value={data.questionBankStats.pending} />
+        <StatCard label="Pending verification" value={data.questionBankStats.pending} highlight={data.pendingActions.unverifiedQuestions > 0} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="Student practice attempts (your courses)" value={data.practiceStatistics.totalAttempts} />
+        <div className="card">
+          <p className="text-sm text-slate-500">Average student score</p>
+          <p className="mt-1 text-3xl font-semibold text-slate-900">
+            {data.practiceStatistics.averagePercentage === null ? '—' : `${data.practiceStatistics.averagePercentage}%`}
+          </p>
+        </div>
+        <StatCard label="Draft papers awaiting submission" value={data.pendingActions.draftPapers} highlight={data.pendingActions.draftPapers > 0} />
       </div>
 
       <section>
@@ -68,11 +81,11 @@ export function LecturerDashboard(): JSX.Element {
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }): JSX.Element {
+function StatCard({ label, value, highlight }: { label: string; value: number; highlight?: boolean }): JSX.Element {
   return (
     <div className="card">
       <p className="text-sm text-slate-500">{label}</p>
-      <p className="mt-1 text-3xl font-semibold text-slate-900">{value}</p>
+      <p className={`mt-1 text-3xl font-semibold ${highlight ? 'text-amber-600' : 'text-slate-900'}`}>{value}</p>
     </div>
   );
 }

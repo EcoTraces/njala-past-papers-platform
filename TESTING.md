@@ -133,6 +133,22 @@ these tests makes a network call. Covers:
   recorded real elapsed time and (for submit) didn't recompute scores
   safely. Again, the RPCs' own correctness is proven separately against
   real Postgres.
+- `dashboard.routes.test.ts` (Loop 10) - a self-contained in-memory
+  fake query builder (supports `.eq()`/`.in()`/`.gte()`/`.order()`/
+  `.limit()`/exact-count `head` queries) covering the conditional
+  branches most likely to break silently rather than loudly: a lecturer
+  with zero assigned courses gets a zeroed `practiceStatistics` and the
+  route never issues an empty `.in('course_id', [])` query against
+  `practice_sessions`; a lecturer *with* courses gets a real average
+  computed only from `SUBMITTED` sessions in their own courses; a
+  student with no `department_id` gets `recommendations: []` rather
+  than an error; a failed `admin_dashboard_stats()` RPC call surfaces
+  as a real `500`, not dashboard fields silently defaulting to zero;
+  and `/api/analytics`'s `totalUploads`/`uploadsLast30Days` reflect an
+  exact count rather than the length of a capped row fetch. Building
+  and tearing down a fresh app instance per test (via `vi.doMock` +
+  `vi.resetModules()`) so each scenario gets its own fake user/role/
+  fixture without cross-test bleed.
 
 Test files are excluded from the production build
 (`tsconfig.build.json` in `apps/api` and `packages/shared`) but are
@@ -323,8 +339,14 @@ others:
   and **duplicate submission is a safe no-op** - resubmitting an
   already-`SUBMITTED` session returns the identical result rather than
   erroring or re-scoring.
+- **`admin_dashboard_stats()` reports real data, not fake numbers**
+  (Loop 10): inserting a `SUSPENDED` account never moves `active_users`
+  (a plain `count(*)` over every profile row would have), and setting a
+  paper's `view_count`/`download_count` directly is reflected in the
+  function's `total_views`/`total_downloads` aggregates on the very
+  next call.
 
-25 scenarios in total (42 individual PASS assertions - several
+26 scenarios in total (44 individual PASS assertions - several
 scenarios cover more than one assertion each). CI runs this against a real `postgres:16-alpine` service container on
 every push/PR (`.github/workflows/ci.yml`, job `database`).
 

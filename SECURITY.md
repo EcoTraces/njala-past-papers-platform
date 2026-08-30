@@ -63,7 +63,7 @@ Three independent layers, in order of how much you should trust them:
    itself validates. This is the layer that still protects the data if
    an API route's authorization check is ever missing or wrong.
    Directly exercised by `supabase/tests/rls_rbac_assertions.sql`
-   against a real Postgres instance (see TESTING.md) - 25 scenarios
+   against a real Postgres instance (see TESTING.md) - 26 scenarios
    including IDOR, IDOR-adjacent (another student's practice session),
    IDOR on the paper workflow (an unrelated lecturer, a lecturer trying
    to approve their own paper), IDOR on paper version history (a

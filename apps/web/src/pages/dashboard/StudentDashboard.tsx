@@ -10,6 +10,8 @@ interface StudentDashboardResponse {
   bookmarks: Array<{ paper_id: string; examination_papers: { id: string; title: string } | null }>;
   recentAttempts: Array<{ id: string; title: string; status: string; percentage: number | null }>;
   notifications: Array<{ id: string; title: string; is_read: boolean }>;
+  performance: { totalAttempts: number; averagePercentage: number | null };
+  recommendations: Array<{ id: string; title: string; courses: { code: string; title: string } | null }>;
 }
 
 export function StudentDashboard(): JSX.Element {
@@ -26,6 +28,33 @@ export function StudentDashboard(): JSX.Element {
         <h1 className="text-2xl font-semibold text-slate-900">Your dashboard</h1>
         <p className="text-slate-600">Recently published papers, your bookmarks and recent practice attempts.</p>
       </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="card">
+          <p className="text-sm text-slate-500">Practice attempts completed</p>
+          <p className="mt-1 text-3xl font-semibold text-slate-900">{data.performance.totalAttempts}</p>
+        </div>
+        <div className="card">
+          <p className="text-sm text-slate-500">Average score</p>
+          <p className="mt-1 text-3xl font-semibold text-slate-900">
+            {data.performance.averagePercentage === null ? '—' : `${data.performance.averagePercentage}%`}
+          </p>
+        </div>
+      </div>
+
+      {data.recommendations.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-lg font-medium text-slate-900">Recommended for you</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {data.recommendations.map((paper) => (
+              <Link key={paper.id} to={`/app/papers/${paper.id}`} className="card block hover:shadow-md">
+                <p className="text-xs font-medium uppercase text-brand-600">{paper.courses?.code}</p>
+                <p className="mt-1 font-medium text-slate-900">{paper.title}</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-slate-900">Recently published papers</h2>

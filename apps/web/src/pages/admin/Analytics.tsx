@@ -14,7 +14,8 @@ interface AnalyticsPaper {
 interface AnalyticsResponse {
   mostViewedPapers: AnalyticsPaper[];
   mostDownloadedPapers: AnalyticsPaper[];
-  uploadCountSample: number;
+  totalUploads: number;
+  uploadsLast30Days: number;
 }
 
 function truncateTitle(title: string, max = 28): string {
@@ -84,7 +85,9 @@ export function Analytics(): JSX.Element {
         </section>
       </div>
 
-      <p className="text-sm text-slate-500">Based on a sample of {data.uploadCountSample} recent uploads.</p>
+      <p className="text-sm text-slate-500">
+        {data.totalUploads} papers uploaded in total, {data.uploadsLast30Days} in the last 30 days.
+      </p>
     </div>
   );
 }

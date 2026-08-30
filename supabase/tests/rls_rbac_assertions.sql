@@ -1022,6 +1022,52 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Scenario 26 (Loop 10): admin_dashboard_stats() reflects real data,
+-- not fake/placeholder numbers - active_users excludes a suspended
+-- account, and views/downloads/practice-attempts are genuine
+-- aggregates over the actual fixture data (not hardcoded). The
+-- function's ACTIVE-status filter is a plain WHERE clause, not an
+-- RLS-dependent computation, so this runs as the postgres superuser
+-- like every other fixture setup in this file rather than needing an
+-- authenticated-role round trip.
+-- ---------------------------------------------------------------------
+do $$
+declare v_active_before bigint;
+begin
+  select active_users into v_active_before from admin_dashboard_stats();
+
+  insert into auth.users (id) values ('80000000-0000-0000-0000-000000000012');
+  insert into profiles (id, student_id, full_name, status) values
+    ('80000000-0000-0000-0000-000000000012', 'SUSPTEST01', 'Suspended Test Account', 'SUSPENDED');
+
+  if (select active_users from admin_dashboard_stats()) is distinct from v_active_before then
+    raise exception 'FAIL: adding a SUSPENDED account should never change active_users, was % before, % after', v_active_before, (select active_users from admin_dashboard_stats());
+  end if;
+  raise notice 'PASS: active_users correctly excludes a SUSPENDED account (not just counting every profile row)';
+end;
+$$;
+
+update examination_papers set view_count = 7, download_count = 3 where id = 'a1000000-0000-0000-0000-000000000002';
+
+do $$
+declare v_views bigint; v_downloads bigint; v_attempts bigint;
+begin
+  select total_views, total_downloads, total_practice_attempts
+    into v_views, v_downloads, v_attempts
+    from admin_dashboard_stats();
+  if v_views < 7 or v_downloads < 3 then
+    raise exception 'FAIL: admin_dashboard_stats() should reflect the real view_count/download_count just set (>=7/>=3), got views=%, downloads=%', v_views, v_downloads;
+  end if;
+  if v_attempts < 1 then
+    raise exception 'FAIL: admin_dashboard_stats() should count at least the SUBMITTED practice sessions from earlier scenarios, got %', v_attempts;
+  end if;
+  raise notice 'PASS: admin_dashboard_stats() reflects real aggregate data (views=%, downloads=%, attempts=%), not fake numbers', v_views, v_downloads, v_attempts;
+end;
+$$;
+
+reset role;
+
 rollback;
 
 \echo 'All RLS/RBAC assertions passed.'

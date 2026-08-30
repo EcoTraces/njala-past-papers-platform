@@ -15,6 +15,7 @@ interface LibraryDashboardResponse {
     attempts: number;
     examination_papers: { title: string } | null;
   }>;
+  catalogueStats: { totalPapers: number; totalPublished: number; totalCourses: number };
 }
 
 export function LibraryDashboard(): JSX.Element {
@@ -39,6 +40,21 @@ export function LibraryDashboard(): JSX.Element {
           <p className="text-slate-600">Papers awaiting review, and recent verification activity.</p>
         </div>
         <Link to="/app/library/queue" className="btn-primary">Open review queue</Link>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="card">
+          <p className="text-sm text-slate-500">Total papers</p>
+          <p className="mt-1 text-3xl font-semibold text-slate-900">{data.catalogueStats.totalPapers}</p>
+        </div>
+        <div className="card">
+          <p className="text-sm text-slate-500">Published</p>
+          <p className="mt-1 text-3xl font-semibold text-slate-900">{data.catalogueStats.totalPublished}</p>
+        </div>
+        <div className="card">
+          <p className="text-sm text-slate-500">Courses catalogued</p>
+          <p className="mt-1 text-3xl font-semibold text-slate-900">{data.catalogueStats.totalCourses}</p>
+        </div>
       </div>
 
       <section>

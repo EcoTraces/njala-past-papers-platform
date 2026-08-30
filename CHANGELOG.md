@@ -427,3 +427,60 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
   confirmed not to regress the legitimate flows (a real staff manual
   mark; a LECTURER taking their own practice session still auto-grading
   normally).
+
+## [Unreleased] - Dashboards and analytics: real data, no placeholders (Loop 10)
+
+### Added
+
+- `admin_dashboard_stats()` SQL function (SECURITY INVOKER) reporting
+  `active_users` (excludes non-`ACTIVE` accounts), `total_views`,
+  `total_downloads`, and `total_practice_attempts` - none of these
+  existed before, despite being explicit brief items, because
+  `SUM()`/`COUNT()` aggregates like these can't be expressed through
+  PostgREST's plain query builder (same class of problem as Loop 08's
+  `ts_rank()` ranking, same fix: a real Postgres function).
+- Student dashboard: a genuine `performance` summary (average
+  percentage across *all* `SUBMITTED` attempts, not just the 5 most
+  recent) and `recommendations` (recent published papers in the
+  student's own department, excluding already-bookmarked papers -
+  returns `[]`, not an error, when the student has no department set).
+- Lecturer dashboard: `practiceStatistics` (average score across
+  `SUBMITTED` sessions in the lecturer's own courses) and
+  `pendingActions` (`unverifiedQuestions`, new `draftPapers` count).
+- Library dashboard: `catalogueStats` (`totalPapers`/`totalPublished`/
+  `totalCourses`) via cheap exact-count queries.
+- Admin dashboard: `activeUsers`/`totalViews`/`totalDownloads`/
+  `totalPracticeAttempts` (from the new RPC) and `recentActivity` (last
+  15 `audit_logs` entries with the actor's name).
+- All new fields rendered on their respective dashboard pages and the
+  `/app/analytics` page - nothing added to an API response was left
+  unrendered.
+- `dashboard.routes.test.ts` (5 new HTTP-level tests).
+- `rls_rbac_assertions.sql` scenario 26: proves `admin_dashboard_stats()`
+  reflects real aggregate data and specifically excludes a `SUSPENDED`
+  account from `active_users`.
+
+### Fixed
+
+- `/api/analytics`'s upload count was the `.length` of up to 500 fetched
+  `created_at` rows, not a real count - wasteful (transfers real row
+  data just to discard it) and silently wrong once the catalogue passed
+  500 papers, papered over in the UI by labelling it a "sample".
+  Replaced with two exact-count, zero-row-transfer queries:
+  `totalUploads` (all-time) and `uploadsLast30Days`.
+- Lecturer dashboard: a lecturer with zero assigned courses previously
+  risked an empty `.in('course_id', [])` filter (undefined/unreliable
+  behavior to rely on) - now short-circuits to a zeroed
+  `practiceStatistics` and never queries `practice_sessions` at all in
+  that case (regression-tested).
+
+### Verified
+
+- `npm run build`/`typecheck`/`lint`/`test` all clean; 120 Node tests
+  passing (up from 115: +5 dashboard-routes HTTP-integration).
+- 26/26 RLS/RBAC scenarios, 8/8 Playwright e2e, and 16/16 Python tests
+  (`ruff check` clean) all still passing.
+- Role gating reviewed for every new field: `admin_dashboard_stats()`
+  and `recentActivity` are reachable only via the ADMIN/SUPER_ADMIN
+  admin-dashboard route; student `performance`/`recommendations` only
+  ever read the calling student's own rows.

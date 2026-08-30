@@ -51,6 +51,17 @@ recorded in this repository's commit history - not just written.
   governs visibility) alongside recent/popular/title. Includes a real,
   measured RLS-policy performance fix found via a 50,000-row test - see
   "Findings from Loop 08" in TASK.md and DATABASE.md.
+- Dashboards backed by real database data, not placeholder numbers:
+  student (attempt count + true average score across every submitted
+  attempt, department-scoped recommendations), lecturer (practice
+  statistics across their own courses, draft/unverified-question
+  pending actions), library (catalogue stats via exact-count queries),
+  and admin (active users, total views/downloads, total practice
+  attempts, recent system activity) - the last four backed by a new
+  `admin_dashboard_stats()` SQL function since PostgREST's query
+  builder can't express `SUM()`/role-filtered `COUNT()` aggregates any
+  more than it could `ts_rank()` in Loop 08 - see "Findings from
+  Loop 10" in TASK.md.
 
 **Frontend**
 - All page categories from the brief exist and call the real API:
@@ -117,10 +128,11 @@ recorded in this repository's commit history - not just written.
   done speculatively without a matching measurement justifying each
   change - a good candidate for the security-hardening pass.
 - Analytics is limited to what `/api/analytics` and the dashboards
-  expose (most-viewed/downloaded papers, basic counts). A dedicated
-  `/app/analytics` page now renders this as real Recharts bar charts
-  (code-split so the dependency doesn't bloat the main bundle) - still
-  no exportable reports or time-series trends.
+  expose (most-viewed/downloaded papers, basic counts, real total/
+  30-day upload counts via an exact-count query as of Loop 10). A
+  dedicated `/app/analytics` page now renders this as real Recharts bar
+  charts (code-split so the dependency doesn't bloat the main bundle) -
+  still no exportable reports or time-series trends.
 - No dedicated "Help"/support ticketing beyond the static Help/Contact
   pages.
 - Content moderation / duplicate-record management beyond the
