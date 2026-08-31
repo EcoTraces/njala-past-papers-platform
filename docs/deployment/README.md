@@ -114,6 +114,65 @@ instead of sending. To go live:
    Auth's own `resetPasswordForEmail()` from the frontend, which needs
    Supabase's SMTP configured (Auth → Email templates, step 7 above).
 
+## Rollback
+
+- **Render** (`njala-api`, `njala-document-service`): every deploy is
+  kept in the service's Deploys tab. A bad deploy is rolled back by
+  clicking a previous successful deploy and choosing **Rollback to
+  this deploy** - no rebuild needed, Render redeploys that exact image.
+  Do this first if a deploy is actively broken; investigate after.
+- **Vercel**: same idea under the project's Deployments tab - **Promote
+  to Production** on any previous deployment switches production
+  traffic to it immediately, independent of a rebuild.
+- **Database migrations are forward-only** - `supabase/migrations/`
+  has no down-migration convention (each file is a one-way `create`/
+  `alter`). Rolling back application code (Render/Vercel) does **not**
+  undo a migration that already ran. Practical implications:
+  - Never run a new/unreviewed migration directly against production.
+    Apply it to a staging Supabase project first (a second project on
+    the free tier is enough), exercise the app against it, then
+    `supabase db push` to production once confirmed.
+  - Prefer additive, backward-compatible migrations (new nullable
+    columns, new tables) over destructive ones (dropping/renaming a
+    column a currently-deployed API version still reads) so that an
+    application-level rollback doesn't leave the old code talking to a
+    schema it no longer understands.
+  - If a bad migration must be undone, write and review a new,
+    explicit reverse migration by hand (e.g. a `drop column`/`alter`
+    file with the next timestamp) - there's no automated `db down`.
+
+## Service health monitoring
+
+- Both Render services already expose their configured health check
+  path (`/api/health` for `njala-api`, `/health` for
+  `njala-document-service` - see `render.yaml`). Render polls this on
+  an interval and automatically restarts an instance that starts
+  failing it, and blocks a new deploy from receiving traffic until its
+  health check passes - no extra configuration needed for that baseline.
+- `GET /api/health/ready` (api only) additionally confirms real
+  database connectivity (queries `system_settings`), distinct from the
+  plain liveness check - useful for diagnosing "the process is up but
+  can't reach Supabase" separately from "the process itself is down."
+  This is not Render's configured health check path (liveness is
+  intentionally the simpler, faster check for that), but is worth
+  polling from an external uptime monitor (see below) or hitting
+  manually when triaging an incident.
+- Nothing in this repository currently pages/alerts on a health check
+  failure beyond Render's own auto-restart - for production use,
+  point an external uptime monitor (e.g. Better Uptime, UptimeRobot,
+  Checkly) at `/api/health`, `/api/health/ready`, and
+  `/health` on a short interval (1-5 min) with real alerting, since
+  Render restarting a crashed instance is not the same as anyone being
+  told it happened.
+- All three Dockerfiles (`apps/api`, `apps/document-service`,
+  `apps/web`) also declare their own `HEALTHCHECK` instruction, so
+  `docker ps`/`docker compose ps` reports container health directly
+  for local/self-hosted runs, and `.github/workflows/ci.yml`'s
+  `docker` job builds all three images on every push/PR - a broken
+  `Dockerfile` (a bad `COPY` path, a dependency that only fails inside
+  the container) fails CI instead of only surfacing at an actual
+  Render/Vercel deploy.
+
 ## Environment variable reference
 
 See `.env.example` at the repo root and the per-app `.env.example`
@@ -121,6 +180,58 @@ files (`apps/api/.env.example`, `apps/web/.env.example`,
 `apps/document-service/.env.example`) for the full list with
 descriptions. Never commit a real `.env` file - `.gitignore` already
 excludes them.
+
+**Never expose these outside their server-side owner**:
+`SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS entirely - server-only, never
+in a `VITE_`-prefixed variable or anywhere Vercel/the browser can see
+it), `DOCUMENT_SERVICE_CALLBACK_SECRET` /
+`DOCUMENT_SERVICE_SHARED_SECRET` (the same shared secret under each
+service's own name - must match between the two Render services, never
+sent to the frontend), any real database password (`SUPABASE_DB_URL`
+carries one - treat it like the service-role key), and, if a
+transactional email provider is ever wired up (see below), that
+provider's API key.
+
+Exactly which variable belongs on which platform, so nothing ends up
+configured (or exposed) in the wrong place:
+
+| Variable | Vercel (`apps/web`) | Render `njala-api` | Render `njala-document-service` | Supabase |
+|---|---|---|---|---|
+| `NODE_ENV` | - | ✅ *(`production`)* | - | - |
+| `DOCUMENT_SERVICE_ENV` | - | - | ✅ *(`production`)* | - |
+| `SUPABASE_URL` | - | ✅ | - | *(is the project)* |
+| `VITE_SUPABASE_URL` | ✅ | - | - | - |
+| `SUPABASE_ANON_KEY` | - | ✅ | - | *(Project Settings → API)* |
+| `VITE_SUPABASE_ANON_KEY` | ✅ | - | - | - |
+| `SUPABASE_SERVICE_ROLE_KEY` | ❌ never | ✅ | - | *(Project Settings → API)* |
+| `SUPABASE_DB_URL` | ❌ never | optional (manual `psql` use only - the app itself never reads it) | - | *(Project Settings → Database)* |
+| `SUPABASE_STORAGE_BUCKET` | - | ✅ | - | *(created by migration)* |
+| `STUDENT_AUTH_IDENTIFIER_DOMAIN` | - | ✅ | - | - |
+| `VITE_API_BASE_URL` | ✅ | - | - | - |
+| `API_PUBLIC_URL` | - | ✅ | - | - |
+| `WEB_APP_URL` | - | ✅ *(the Vercel URL)* | - | - |
+| `CORS_ALLOWED_ORIGINS` | - | ✅ *(the Vercel URL)* | - | - |
+| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | - | ✅ | - | - |
+| `SIGNED_URL_EXPIRY_SECONDS` | - | ✅ | - | - |
+| `LOG_LEVEL` | - | ✅ | - | - |
+| `DOCUMENT_SERVICE_URL` | - | ✅ *(the doc-service's Render URL)* | - | - |
+| `DOCUMENT_SERVICE_CALLBACK_SECRET` | ❌ never | ✅ | - | - |
+| `NODE_API_CALLBACK_URL` | - | - | ✅ *(the API's Render URL + path)* | - |
+| `DOCUMENT_SERVICE_SHARED_SECRET` | ❌ never | - | ✅ *(same value as `DOCUMENT_SERVICE_CALLBACK_SECRET` above)* | - |
+| `TESSERACT_CMD` / `OCR_LANGUAGE` / `MAX_UPLOAD_MB` | - | - | ✅ | - |
+| `VITE_APP_NAME` | ✅ | - | - | - |
+
+Notes on reading the table: Supabase's own dashboard is where the
+`SUPABASE_*` key values *come from* (Project Settings → API/Database),
+not somewhere you paste them back into - it's listed as a column only
+to show where each value originates. A ❌ marks a variable that must
+**never** be set on that platform even though it might seem convenient
+(most importantly: the service-role key and both shared-secret names
+must never reach Vercel/the browser, since anything in a Vercel env var
+prefixed `VITE_` is bundled into the public JS and anything not
+`VITE_`-prefixed on Vercel is still visible to anyone with Vercel
+project access - Vercel is not a private secret store for this app's
+purposes, only `VITE_`-prefixed public config belongs there at all).
 
 ## CI/CD
 

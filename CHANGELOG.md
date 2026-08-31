@@ -721,3 +721,52 @@ not fixed" below.
   (unchanged), 17/17 Python tests (up from 16) + `ruff check` + `mypy`
   clean, production build byte-size-unchanged (confirming the removed
   dependencies were genuinely dead weight).
+
+## [Unreleased] - Production deployment readiness (Loop 15)
+
+### Fixed
+
+- The root `.env.example` documented a phantom `SUPABASE_JWT_SECRET`
+  variable that doesn't exist in `apps/api`'s actual env schema and is
+  referenced nowhere in the codebase - removed. The real token-
+  verification path calls Supabase Auth's own API rather than
+  verifying a JWT locally, so this was never needed.
+
+### Added
+
+- A `docker` job in `.github/workflows/ci.yml` that builds all three
+  production Dockerfiles (`apps/api`, `apps/document-service`,
+  `apps/web`) with the exact same arguments `render.yaml`/
+  `docker-compose.yml` use - previously never built anywhere in CI, so
+  a Dockerfile-specific breakage would only have surfaced at an actual
+  Render/Vercel deploy.
+- A Rollback section in `docs/deployment/README.md`: Render's/Vercel's
+  built-in previous-deploy rollback, and the more consequential case -
+  Postgres migrations here are forward-only, so an app-level rollback
+  doesn't undo a schema change.
+- An expanded Service health monitoring section: what Render's
+  configured health checks do automatically (restart, gate deploy
+  traffic) versus what they don't (alert anyone), plus
+  `/api/health/ready`'s distinct real-DB-connectivity purpose.
+- An explicit environment-variable table in `docs/deployment/README.md`
+  mapping every variable to Vercel/Render-api/Render-document-service/
+  Supabase, with ❌ markers on every secret that must never reach
+  Vercel/the browser.
+
+### Verified
+
+- A repo-wide secret scan (JWT-shaped tokens, cloud access keys, PEM
+  private-key blocks) found nothing; `git log` confirms no real `.env`
+  file has ever been committed. `render.yaml`'s full env var list was
+  cross-checked against the actual zod schema and found complete. A
+  genuine clean-room production build (`dist/` removed first) produced
+  byte-identical output to the prior build.
+- Docker daemon cannot run in this environment (confirmed by trying,
+  not assumed - a sandbox privilege restriction) - all three
+  Dockerfiles' referenced paths were verified to exist by hand instead,
+  and the new CI job is what will actually build them end to end for
+  the first time once pushed.
+- 136 Node+web unit tests, 27/27 RLS/RBAC scenarios, 47/47 Playwright
+  e2e, 17/17 Python tests + `ruff check` clean (all unchanged - this
+  loop touched CI config, docs, and env-file text, no application
+  code).

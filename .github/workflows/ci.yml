@@ -86,6 +86,34 @@ jobs:
         working-directory: apps/document-service
         run: pytest -v
 
+  docker:
+    name: Docker production image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # These are the exact Dockerfiles Render builds from in
+      # production (see render.yaml) - previously never actually
+      # built anywhere in CI, so a broken COPY path or a dependency
+      # change that only breaks the Docker build (not the plain
+      # `npm run build`/`pip install` above) would have gone
+      # undetected until an actual Render deploy failed. No push/
+      # registry step - this only proves both images still build.
+      - name: Build apps/api image
+        run: docker build -f apps/api/Dockerfile -t njala-api:ci .
+      - name: Build apps/document-service image
+        run: docker build -f apps/document-service/Dockerfile -t njala-document-service:ci apps/document-service
+      # Not deployed via Docker in production (Vercel is the primary
+      # target for apps/web - see docs/deployment/README.md), but this
+      # image is what docker-compose.yml and self-hosted deployments
+      # actually use, so it gets the same build-only verification.
+      - name: Build apps/web image
+        run: >
+          docker build -f apps/web/Dockerfile -t njala-web:ci
+          --build-arg VITE_SUPABASE_URL=https://placeholder.supabase.co
+          --build-arg VITE_SUPABASE_ANON_KEY=placeholder-anon-key
+          --build-arg VITE_API_BASE_URL=http://localhost:4000/api
+          .
+
   database:
     name: Database migrations + RLS/RBAC tests
     runs-on: ubuntu-latest

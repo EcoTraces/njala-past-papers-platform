@@ -1029,6 +1029,113 @@ nothing there to fix.
   dependency removals were genuinely dead weight, not silently already
   bundled).
 
+## Findings from Loop 15 (production deployment readiness)
+
+- **`[BUG]` → fixed: the root `.env.example` documented a phantom
+  `SUPABASE_JWT_SECRET` variable** ("used to verify Supabase-issued
+  access tokens... server-side only") that doesn't exist anywhere in
+  `apps/api/src/config/env.ts`'s actual schema and is referenced
+  nowhere else in the codebase (confirmed via a repo-wide grep before
+  removing it) - the real token-verification path
+  (`authenticate.ts` → `supabaseAdmin.auth.getUser(accessToken)`) calls
+  Supabase Auth's own API rather than verifying a JWT signature
+  locally, so this variable was never architecturally needed at all.
+  Left in place, it risked an operator wasting time hunting for a
+  value the app doesn't read, or worse, believing a real secret needed
+  to go there. The per-app `apps/api/.env.example` was already
+  accurate (no such entry) - only the root consolidated file had
+  drifted.
+- **`[MISSING]` → implemented: the three Dockerfiles actually used for
+  production (Render) and self-hosted deployment (`apps/api`,
+  `apps/document-service`, `apps/web`) were never built anywhere in
+  CI** - `.github/workflows/ci.yml` verified `npm run build`/
+  `pip install` + tests, but a change that only broke inside the
+  Docker build specifically (a stale `COPY` path, a dependency that
+  resolves differently in the container) would have gone undetected
+  until an actual Render/Vercel deploy failed. Added a `docker` CI job
+  that builds all three images with the exact same `-f`/context
+  arguments `render.yaml` and `docker-compose.yml` already use - no
+  push/registry step, purely a build-succeeds check. Verified the
+  referenced paths in each Dockerfile (all `COPY` sources,
+  `apps/api/dist/index.js`'s existence after a real local build,
+  `apps/document-service/requirements.txt`, `apps/web/nginx.conf`) by
+  hand and confirmed the CI YAML itself parses correctly - the actual
+  `docker build` could not be run and verified locally in this
+  environment (the Docker CLI is present but its daemon cannot start
+  here - `ulimit: error setting limit (Operation not permitted)`,
+  a sandbox privilege restriction, confirmed by trying rather than
+  assumed), so this new CI job is the first time these three
+  Dockerfiles will actually be built end to end; the immediate next
+  step once this branch reaches GitHub is to confirm that job goes
+  green.
+- **`[MISSING]` → implemented: no documented rollback process** for
+  any of the three deployment targets. Added a Rollback section to
+  `docs/deployment/README.md` covering Render's and Vercel's built-in
+  "redeploy/promote a previous build" mechanisms, and the more
+  consequential case: Postgres migrations in this repo are forward-
+  only (no down-migration convention exists), so an application-code
+  rollback does *not* undo a schema change - documented the practical
+  mitigation (stage every migration against a second Supabase project
+  before applying to production; prefer additive/backward-compatible
+  migrations; write an explicit hand-authored reverse migration if one
+  is ever truly needed).
+- **`[MISSING]` → implemented: health-check/monitoring guidance was
+  limited to a one-line smoke-test mention.** Expanded into a Service
+  health monitoring section: what Render's configured health checks
+  already do automatically (poll, auto-restart, gate new-deploy
+  traffic) versus what they don't (page/alert anyone) - explicitly
+  recommending an external uptime monitor for real alerting, since
+  "Render silently restarted a crashed instance" and "someone found
+  out" are not the same thing. Also documented `/api/health/ready`'s
+  distinct purpose (real DB connectivity check, not just process
+  liveness) as a specifically useful incident-triage tool that isn't
+  Render's own configured health-check path.
+- **`[MISSING]` → implemented: no explicit, single place answering
+  "which environment variable goes on which platform"** - the brief
+  calls this out by name. `.env.example` files existed and were
+  individually accurate, but nothing enumerated the full cross-
+  platform picture in one place, and nothing called out *which*
+  variables must never leave their server-side owner. Added a table to
+  `docs/deployment/README.md` mapping every variable to
+  Vercel/Render-api/Render-document-service/Supabase, with explicit ❌
+  markers on `SUPABASE_SERVICE_ROLE_KEY`,
+  `DOCUMENT_SERVICE_CALLBACK_SECRET`/`_SHARED_SECRET`, and
+  `SUPABASE_DB_URL` for the platforms they must never reach - Vercel
+  in particular, since a non-`VITE_`-prefixed Vercel env var is not a
+  private secret store for this app's purposes (anything `VITE_`-
+  prefixed ships in the public JS bundle; anything else is still
+  visible to anyone with Vercel project access, unlike a real
+  server-side secret manager).
+- **Verified, not just trusted**: a repo-wide secret scan (JWT-shaped
+  tokens, AWS-style access keys, PEM private-key blocks) across every
+  git-tracked file found nothing, and `git log --all --diff-filter=A`
+  confirms no real `.env` file has ever been committed to this
+  repository's history - `.gitignore` has correctly excluded them from
+  the start. `render.yaml`'s full `njala-api` env var list was cross-
+  checked line-by-line against `env.ts`'s actual zod schema and found
+  complete (every schema field present, nothing extra). A genuine
+  clean-room production build (`rm -rf` every `dist/` first, then
+  `npm run build`) was run and produced byte-identical output to the
+  prior build, confirming reproducibility.
+- Confirmed already correct, not changed: `vercel.json` exists (at
+  `apps/web/vercel.json`, the correct location for a monorepo Vercel
+  deploy with Root Directory set to `apps/web` - ROADMAP.md's claim
+  that it exists was accurate; an initial repo-root-only check missed
+  it, corrected before concluding anything was actually missing); both
+  `/api/health` (liveness) and `/api/health/ready` (readiness, real DB
+  check) already existed and matched the deployment doc's own
+  description of them exactly; CORS/HTTPS/proxy-trust handling was
+  already hardened in Loop 11 (`trustProxy: 1`, explicit CORS
+  allowlist) and needed no further change here.
+- Full validation gate clean: 136 Node+web unit tests (unchanged - this
+  loop touched CI config, docs, and two `.env.example` lines, no
+  application code), 27/27 RLS/RBAC scenarios (unchanged - no
+  migrations), 47/47 Playwright e2e (unchanged), 17/17 Python tests +
+  `ruff check` clean (unchanged), a genuine clean-room production
+  build, and the new `docker` CI job's YAML syntax validated locally
+  (`python3 -c "import yaml; yaml.safe_load(...)"`) even though the
+  actual `docker build` itself could only be verified once pushed.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus

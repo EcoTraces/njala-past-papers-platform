@@ -109,7 +109,16 @@ recorded in this repository's commit history - not just written.
 - Dockerfiles (api, web, document-service), docker-compose for local
   full-stack runs, GitHub Actions CI (lint/typecheck/unit tests/build
   for all three Node packages + Python + the RLS/RBAC suite + a
-  Playwright job), vercel.json, render.yaml.
+  Playwright job + a `docker` job that builds all three production
+  images, added Loop 15), vercel.json, render.yaml.
+- Deployment readiness pass (Loop 15): a per-platform environment-
+  variable reference table (`docs/deployment/README.md`) mapping every
+  variable to Vercel/Render-api/Render-document-service/Supabase with
+  explicit never-expose markers, a documented rollback process
+  (including the forward-only nature of this repo's Postgres
+  migrations), expanded health-monitoring guidance, and a repo-wide
+  secret scan that found nothing. See "Findings from Loop 15" in
+  TASK.md.
 
 **Tests**
 - Unit tests: `packages/shared` (validation + enum/permission
@@ -128,6 +137,14 @@ recorded in this repository's commit history - not just written.
   which this environment doesn't have. `docs/deployment/README.md`
   documents the exact steps; they haven't been executed against real
   infrastructure.
+- The new `docker` CI job (Loop 15, `.github/workflows/ci.yml`) that
+  builds all three production Dockerfiles has not itself been
+  confirmed to pass yet - this sandbox's Docker CLI has no daemon it
+  can start (`ulimit: error setting limit (Operation not permitted)`),
+  so `docker build` could only be verified by hand-checking every
+  referenced path exists, not by actually running it. It will run for
+  real the first time this branch reaches GitHub Actions; check that
+  it's green there.
 - `docs/deployment/bootstrap-admin.md` describes creating the very
   first SUPER_ADMIN by hand (deliberately - no code path auto-creates
   one); it hasn't been run against a live project either.
