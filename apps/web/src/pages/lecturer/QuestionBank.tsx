@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUESTION_TYPES, type QuestionType } from '@njala/shared';
 import { api, ApiError } from '../../lib/apiClient';
 import { PageSpinner } from '../../components/Spinner';
+import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useAuth } from '../../hooks/useAuth';
 
 interface Course { id: string; code: string; title: string; }
@@ -27,6 +29,8 @@ export function QuestionBank(): JSX.Element {
   const [marks, setMarks] = useState(1);
   const [options, setOptions] = useState([emptyOption(), emptyOption()]);
   const [expectedAnswer, setExpectedAnswer] = useState('');
+  const [pendingReject, setPendingReject] = useState<QuestionItem | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   const coursesQuery = useQuery({ queryKey: ['courses'], queryFn: () => api.get<{ items: Course[] }>('/courses') });
   const questionsQuery = useQuery({
@@ -57,7 +61,12 @@ export function QuestionBank(): JSX.Element {
 
   const verify = useMutation({
     mutationFn: ({ id, approve }: { id: string; approve: boolean }) => api.post(`/questions/${id}/verify`, { approve }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['questions'] }),
+    onSuccess: () => {
+      setPendingReject(null);
+      setVerifyError(null);
+      queryClient.invalidateQueries({ queryKey: ['questions'] });
+    },
+    onError: (err) => setVerifyError(err instanceof ApiError ? err.message : 'Could not update this question. Please try again.'),
   });
 
   if (coursesQuery.isLoading) return <PageSpinner />;
@@ -149,10 +158,14 @@ export function QuestionBank(): JSX.Element {
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-slate-900">Questions {courseId && '(filtered by course)'}</h2>
+        {verifyError && <p role="alert" className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{verifyError}</p>}
         {questionsQuery.isLoading ? (
-          <PageSpinner />
+          <SkeletonRows count={5} />
         ) : !questionsQuery.data || questionsQuery.data.items.length === 0 ? (
-          <EmptyState title="No questions yet" />
+          <EmptyState
+            title="No questions yet"
+            description={courseId ? 'No questions have been added for this course yet.' : 'Add a question above to start building the question bank.'}
+          />
         ) : (
           <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
             {questionsQuery.data.items.map((q) => (
@@ -163,8 +176,8 @@ export function QuestionBank(): JSX.Element {
                 </div>
                 {canVerify && q.verification_status === 'UNVERIFIED' && (
                   <div className="flex shrink-0 gap-2">
-                    <button type="button" className="btn-secondary" onClick={() => verify.mutate({ id: q.id, approve: true })}>Verify</button>
-                    <button type="button" className="btn-danger" onClick={() => verify.mutate({ id: q.id, approve: false })}>Reject</button>
+                    <button type="button" className="btn-secondary" onClick={() => verify.mutate({ id: q.id, approve: true })} disabled={verify.isPending}>Verify</button>
+                    <button type="button" className="btn-danger" onClick={() => setPendingReject(q)} disabled={verify.isPending}>Reject</button>
                   </div>
                 )}
               </li>
@@ -172,6 +185,17 @@ export function QuestionBank(): JSX.Element {
           </ul>
         )}
       </section>
+
+      <ConfirmDialog
+        open={pendingReject !== null}
+        onOpenChange={(open) => !open && setPendingReject(null)}
+        title="Reject this question?"
+        description="It stays in the bank as REJECTED and won't be usable in any practice session until it's edited and re-verified."
+        confirmLabel="Reject question"
+        destructive
+        onConfirm={() => pendingReject && verify.mutate({ id: pendingReject.id, approve: false })}
+        isLoading={verify.isPending}
+      />
     </div>
   );
 }

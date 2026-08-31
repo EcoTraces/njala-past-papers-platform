@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
 import { PageSpinner } from '../../components/Spinner';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import type { QuestionType } from '@njala/shared';
 
 interface SessionQuestion {
@@ -36,6 +37,7 @@ export function PracticeSession(): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [confirmingSubmit, setConfirmingSubmit] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['practice-session', sessionId],
@@ -87,27 +89,50 @@ export function PracticeSession(): JSX.Element {
   if (isLoading || !data) return <PageSpinner />;
 
   const answeredCount = data.answers.length;
+  const totalQuestions = data.questions.length;
+  const progressPercent = totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0;
+  const unansweredCount = totalQuestions - answeredCount;
 
   return (
     <div className="space-y-6 pb-24">
-      <div className="sticky top-14 z-10 -mx-4 border-b border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+      <div className="sticky top-14 z-10 -mx-4 space-y-2 border-b border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-semibold text-slate-900">Practice session</h1>
-          <span className="text-sm text-slate-500">{answeredCount} / {data.questions.length} answered</span>
+          <span className="text-sm text-slate-500">{answeredCount} / {totalQuestions} answered</span>
+        </div>
+        <div
+          role="progressbar"
+          aria-label="Questions answered"
+          aria-valuenow={answeredCount}
+          aria-valuemin={0}
+          aria-valuemax={totalQuestions}
+          className="h-2 w-full overflow-hidden rounded-full bg-slate-200"
+        >
+          <div className="h-full rounded-full bg-brand-600 transition-all" style={{ width: `${progressPercent}%` }} />
         </div>
       </div>
 
       <ol className="space-y-6">
         {data.questions.map(({ questions: q, order_index }) => {
           const existing = answersByQuestion.get(q.id);
+          const isAnswered = Boolean(existing);
           return (
             <li key={q.id} className="card">
-              <p className="mb-3 text-sm font-medium text-slate-900">
-                {order_index + 1}. {q.question_text} <span className="text-xs text-slate-400">({q.marks} marks)</span>
-              </p>
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <p className="text-sm font-medium text-slate-900">
+                  {order_index + 1}. {q.question_text} <span className="text-xs text-slate-400">({q.marks} marks)</span>
+                </p>
+                <span
+                  className={`shrink-0 badge ${isAnswered ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}
+                  aria-label={isAnswered ? 'Answered' : 'Not answered yet'}
+                >
+                  {isAnswered ? 'Answered' : 'Unanswered'}
+                </span>
+              </div>
 
               {(q.question_type === 'MULTIPLE_CHOICE' || q.question_type === 'TRUE_FALSE') && (
-                <div className="space-y-2">
+                <fieldset className="space-y-2">
+                  <legend className="sr-only">Options for question {order_index + 1}</legend>
                   {q.question_options.map((opt) => (
                     <label key={opt.id} className="flex items-center gap-2 text-sm">
                       <input
@@ -119,28 +144,36 @@ export function PracticeSession(): JSX.Element {
                       <span>{opt.option_label}. {opt.option_text}</span>
                     </label>
                   ))}
-                </div>
+                </fieldset>
               )}
 
               {q.question_type === 'NUMERICAL' && (
-                <input
-                  type="number"
-                  className="input"
-                  defaultValue={existing?.numerical_answer ?? ''}
-                  onBlur={(e) => e.target.value && saveAnswer.mutate({ questionId: q.id, numericalAnswer: Number(e.target.value) })}
-                />
+                <div>
+                  <label className="sr-only" htmlFor={`numerical-${q.id}`}>Your numerical answer</label>
+                  <input
+                    id={`numerical-${q.id}`}
+                    type="number"
+                    className="input"
+                    defaultValue={existing?.numerical_answer ?? ''}
+                    onBlur={(e) => e.target.value && saveAnswer.mutate({ questionId: q.id, numericalAnswer: Number(e.target.value) })}
+                  />
+                </div>
               )}
 
               {(q.question_type === 'SHORT_ANSWER' || q.question_type === 'ESSAY' || q.question_type === 'MIXED') && (
-                <textarea
-                  className="input"
-                  rows={q.question_type === 'ESSAY' ? 6 : 2}
-                  defaultValue={existing?.answer_text ?? ''}
-                  onBlur={(e) => e.target.value && saveAnswer.mutate({ questionId: q.id, answerText: e.target.value })}
-                />
+                <div>
+                  <label className="sr-only" htmlFor={`text-${q.id}`}>Your answer</label>
+                  <textarea
+                    id={`text-${q.id}`}
+                    className="input"
+                    rows={q.question_type === 'ESSAY' ? 6 : 2}
+                    defaultValue={existing?.answer_text ?? ''}
+                    onBlur={(e) => saveAnswer.mutate({ questionId: q.id, answerText: e.target.value })}
+                  />
+                </div>
               )}
 
-              {savingId === q.id && <p className="mt-1 text-xs text-slate-400">Saving…</p>}
+              {savingId === q.id && <p className="mt-1 text-xs text-slate-400" role="status">Saving…</p>}
             </li>
           );
         })}
@@ -151,11 +184,26 @@ export function PracticeSession(): JSX.Element {
           <button type="button" className="btn-secondary" onClick={() => pauseSession.mutate()} disabled={pauseSession.isPending}>
             {pauseSession.isPending ? 'Saving…' : 'Save & exit'}
           </button>
-          <button type="button" className="btn-primary" onClick={() => submitSession.mutate()} disabled={submitSession.isPending}>
+          <button type="button" className="btn-primary" onClick={() => setConfirmingSubmit(true)} disabled={submitSession.isPending}>
             {submitSession.isPending ? 'Submitting…' : 'Submit practice session'}
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmingSubmit}
+        onOpenChange={setConfirmingSubmit}
+        title="Submit this practice session?"
+        description={
+          unansweredCount > 0
+            ? `You still have ${unansweredCount} unanswered question${unansweredCount === 1 ? '' : 's'}. Once submitted, you can't come back and change any answers.`
+            : "Once submitted, you can't come back and change any answers."
+        }
+        confirmLabel="Submit"
+        destructive={unansweredCount > 0}
+        onConfirm={() => submitSession.mutate()}
+        isLoading={submitSession.isPending}
+      />
     </div>
   );
 }

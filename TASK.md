@@ -761,6 +761,145 @@ source rather than trusting the earlier audit:
   loop), 11/11 Playwright e2e (up from 8), 16/16 Python tests +
   `ruff check` clean, production build clean.
 
+## Findings from Loop 13 (UI/UX quality audit and hardening)
+
+A full-codebase survey (32 pages, every shared component) preceded any
+edit, so this loop's fixes target the real gaps found, not a generic
+guess. Full survey findings are summarized below each fix; nothing here
+is theoretical.
+
+- **`[MISSING]` → implemented: zero confirmation UI existed anywhere in
+  the app** - every destructive/high-consequence action (approve/
+  publish/archive/reject a paper, suspend a user, reject a question)
+  fired immediately on click, with no "are you sure" step at all.
+  `@radix-ui/react-dialog` was already a dependency but had zero usages
+  anywhere in `src`. Built `ConfirmDialog.tsx` on it (focus-trapped,
+  closes on Escape/backdrop-click/Cancel, `role="alertdialog"`,
+  auto-focuses Cancel rather than the often-destructive confirm button
+  so a stray Enter/Space right after opening can't accidentally
+  confirm) and wired it into `PaperDetail.tsx` (approve/publish/
+  archive/reject - publish in particular makes a paper visible to
+  every student on the platform, arguably the single highest-
+  consequence action in the app and previously completely
+  unconfirmed), `AdminUsers.tsx` (suspend), and `QuestionBank.tsx`
+  (reject). 5 new component tests (`ConfirmDialog.test.tsx`) prove the
+  confirm/cancel/Escape/loading-disabled behaviors directly.
+- **`[MISSING]` → implemented: no skip-to-content link, and the
+  authenticated app's mobile nav had no keyboard/focus handling at
+  all** - didn't close on Escape, didn't close on route change (back/
+  forward navigation, an in-page `navigate()` call, or clicking the
+  wordmark all left it open), and its toggle button had no
+  `aria-expanded`/`aria-controls`. Fixed all four in `AppLayout.tsx`:
+  added a real skip link targeting the existing (previously
+  unreferenced) `#main-content` id, an `Escape` handler that also
+  returns focus to the toggle button, a `useLocation`-driven
+  auto-close effect, `aria-expanded`/`aria-controls` on the toggle, a
+  backdrop overlay so a tap outside the drawer closes it, and focus
+  moves into the drawer's first link when it opens.
+- **`[MISSING]` → implemented: on the public landing page, About/Help/
+  Contact simply vanished below the `sm` (640px) breakpoint with no
+  hamburger or any other way to reach them** - a real problem given
+  the brief's explicit "many students will access the system using
+  smartphones." `Landing.tsx` and `StaticPage.tsx` (used by About/
+  Help/Contact) also each hand-rolled their own inconsistent header.
+  Built a shared `PublicHeader.tsx` with a real, accessible hamburger
+  menu (same Escape/route-change/focus-management pattern as
+  `AppLayout.tsx`'s) and consolidated both pages onto it. "Sign in"
+  renders exactly once, at every breakpoint, rather than duplicated per
+  responsive variant (existing students returning to search/practice
+  are the common case, so it's never hidden behind the menu);
+  secondary links and "Create student account" collapse into the menu
+  below `sm`.
+- **`[BUG]` → fixed: the PDF preview/download flow had no loading or
+  error state at all.** `PaperDetail.tsx`'s "View"/"Download" buttons
+  gave zero visual feedback between click and the signed URL arriving
+  (a slow network made a click look like nothing happened), and the
+  `await api.get(...)` calls had no `try/catch` - a failure (expired
+  session, network error, a 403) was silently swallowed and the viewer
+  section simply never appeared, with no way for the user to know
+  why. Fixed: both actions now show a spinner-in-button loading state,
+  a skeleton placeholder while the preview loads, and a real
+  `role="alert"` error message on failure.
+- **`[MISSING]` → implemented: every single loading state in the app
+  (37 occurrences across 21 pages) was the same full-page-blanking
+  spinner** - no skeleton loader existed anywhere in the codebase,
+  meaning every dashboard/table/search navigation blanked the entire
+  content area rather than preserving layout. Built `Skeleton.tsx`
+  (a base block plus `SkeletonStatCardRow`/`SkeletonCardGrid`/
+  `SkeletonRows` composites shaped to match this app's actual
+  `.card`/grid/list patterns) and applied them to all four
+  dashboards, `PapersBrowse.tsx` (search results), `AdminUsers.tsx`,
+  and `AuditLogs.tsx` - the pages a user is most likely to hit
+  repeatedly.
+- **`[BUG]` → fixed: two data tables had no accessible column headers**
+  (`AdminUsers.tsx`, `AuditLogs.tsx` - the only two real `<table>`
+  elements in the app) - `<th>` with no `scope="col"` at all, so a
+  screen reader can't associate a cell with its column header when
+  navigating cell-by-cell. Fixed both; also added a visible "Page N"
+  indicator with `aria-live="polite"` to `AuditLogs.tsx`'s pagination
+  (previously Previous/Next gave no indication of current position),
+  and screen-reader-only per-row context (`<span className="sr-only">`)
+  on `AdminUsers.tsx`'s otherwise-ambiguous "Suspend"/"Activate"
+  buttons (a screen reader listing all buttons on the page previously
+  heard four identical "Suspend" announcements with no way to tell
+  which user each belonged to).
+- **`[MISSING]` → implemented: zero form fields anywhere in the app
+  (repo-wide grep confirmed) used `aria-invalid`/`aria-describedby`** -
+  `Login.tsx`/`Signup.tsx` (the two highest-traffic forms, using
+  `react-hook-form` + `zodResolver`) already rendered per-field error
+  text, but never associated it with the input itself, so a screen
+  reader announces the error as an unrelated nearby paragraph rather
+  than as the specific reason a field failed. Wired both up field by
+  field (the admin/upload plain-`useState` forms use native
+  `required` + a single top-level error banner instead, a different
+  but internally-consistent pattern deliberately left as-is here to
+  keep this loop's scope to the two forms most students actually use).
+- **`[BUG]` → fixed: the numeric/text answer inputs in
+  `PracticeSession.tsx` silently dropped a cleared answer.** The
+  `onBlur` handlers guarded with `e.target.value &&`, so blurring an
+  emptied SHORT_ANSWER/ESSAY/MIXED field never persisted the clearing
+  - the student would see their own now-empty box but the server still
+  held the old answer. Verified `answerText` is schema-valid as an
+  empty string (`z.string().trim().max(5000).optional()`, no `.min()`)
+  and removed the guard for text-based answers. Left the guard in place
+  for NUMERICAL specifically - `numericalAnswer: z.number().optional()`
+  genuinely cannot represent "cleared" as an empty string without a
+  backend contract change, which is out of scope for a UI-focused pass
+  and is recorded as a known gap in ROADMAP.md rather than worked
+  around unsafely.
+- **`[MISSING]` → implemented: `PracticeSession.tsx` had no visual
+  progress indicator** (only a text "N / M answered" counter) **and no
+  confirmation before submitting** - a single click on "Submit"
+  immediately, irreversibly locked in every answer, including when
+  questions were still unanswered. Added a real `role="progressbar"`
+  bar plus a per-question "Answered"/"Unanswered" badge, and routed
+  Submit through `ConfirmDialog`, with a specifically-worded warning
+  (and the destructive/red styling) when unanswered questions remain.
+- **`[MISSING]` → implemented: `PapersBrowse.tsx`'s empty state gave no
+  path forward when a search/filter combination matched nothing** -
+  fixed with a "Clear filters" action on the empty state, and the
+  message now distinguishes "no results for your search" from "nothing
+  published yet."
+- Investigated and deliberately left as-is, recorded in ROADMAP.md:
+  `PracticeSession.tsx` still has no visible exam-duration countdown
+  timer (would need real design/product decisions about auto-submit
+  behavior, not just a UI tweak); `PracticeResults.tsx` shows marks-only
+  per question with no answer-vs-correct-answer review; dark mode is
+  configured (`darkMode: 'media'`) but has zero `dark:` variant usage
+  anywhere; the admin/upload plain-`useState` forms don't share
+  `Login.tsx`/`Signup.tsx`'s `aria-invalid` treatment (see above).
+- New/changed test coverage: `ConfirmDialog.test.tsx` (5 component
+  tests), `breakpoint-sweep.spec.ts` (35 new Playwright tests - every
+  public page at all five breakpoints named in the brief: 360/390/768/
+  1024/1440px, asserting no horizontal overflow at any of them - only
+  the landing page had any breakpoint coverage before this loop),
+  `responsive-layout.spec.ts` rewritten for the new header design plus
+  new coverage of the mobile menu's open/Escape-close/focus behavior.
+- Full validation gate clean: 136 Node+web unit tests (up from 131),
+  27/27 RLS/RBAC scenarios (unchanged - no schema/policy changes this
+  loop), 47/47 Playwright e2e (up from 11), production build clean,
+  lint clean (including `eslint-plugin-jsx-a11y`, already configured).
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus

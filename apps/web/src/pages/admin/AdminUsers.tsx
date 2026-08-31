@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { api, ApiError } from '../../lib/apiClient';
-import { PageSpinner } from '../../components/Spinner';
+import { SkeletonRows } from '../../components/Skeleton';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 
 interface UserRow {
   id: string;
@@ -27,6 +28,7 @@ export function AdminUsers(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [createdCredential, setCreatedCredential] = useState<{ email: string; temporaryPassword: string } | null>(null);
   const [form, setForm] = useState({ fullName: '', email: '', staffId: '', role: 'LECTURER' as (typeof STAFF_ROLES)[number] });
+  const [pendingSuspend, setPendingSuspend] = useState<UserRow | null>(null);
 
   const usersQuery = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<{ items: UserRow[] }>('/admin/users') });
 
@@ -42,7 +44,10 @@ export function AdminUsers(): JSX.Element {
 
   const updateStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) => api.patch(`/admin/users/${id}/status`, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
+    onSuccess: () => {
+      setPendingSuspend(null);
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
   });
 
   return (
@@ -98,17 +103,17 @@ export function AdminUsers(): JSX.Element {
       <section>
         <h2 className="mb-3 text-lg font-medium text-slate-900">All users</h2>
         {usersQuery.isLoading || !usersQuery.data ? (
-          <PageSpinner />
+          <SkeletonRows count={8} />
         ) : (
           <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Name</th>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">ID</th>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Roles</th>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Status</th>
-                  <th className="px-4 py-2" />
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Name</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">ID</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Roles</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Status</th>
+                  <th scope="col" className="px-4 py-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -122,11 +127,17 @@ export function AdminUsers(): JSX.Element {
                     </td>
                     <td className="px-4 py-2 text-right">
                       {u.status === 'ACTIVE' ? (
-                        <button type="button" className="btn-danger" onClick={() => updateStatus.mutate({ id: u.id, status: 'SUSPENDED' })}>Suspend</button>
+                        <button type="button" className="btn-danger" onClick={() => setPendingSuspend(u)}>
+                          Suspend<span className="sr-only"> {u.full_name}</span>
+                        </button>
                       ) : u.status === 'PENDING' ? (
-                        <button type="button" className="btn-primary" onClick={() => updateStatus.mutate({ id: u.id, status: 'ACTIVE' })}>Activate</button>
+                        <button type="button" className="btn-primary" onClick={() => updateStatus.mutate({ id: u.id, status: 'ACTIVE' })}>
+                          Activate<span className="sr-only"> {u.full_name}</span>
+                        </button>
                       ) : (
-                        <button type="button" className="btn-secondary" onClick={() => updateStatus.mutate({ id: u.id, status: 'ACTIVE' })}>Reactivate</button>
+                        <button type="button" className="btn-secondary" onClick={() => updateStatus.mutate({ id: u.id, status: 'ACTIVE' })}>
+                          Reactivate<span className="sr-only"> {u.full_name}</span>
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -136,6 +147,17 @@ export function AdminUsers(): JSX.Element {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={pendingSuspend !== null}
+        onOpenChange={(open) => !open && setPendingSuspend(null)}
+        title={`Suspend ${pendingSuspend?.full_name ?? 'this user'}?`}
+        description="They will be immediately signed out of any active session and unable to sign back in until an administrator reactivates the account."
+        confirmLabel="Suspend account"
+        destructive
+        onConfirm={() => pendingSuspend && updateStatus.mutate({ id: pendingSuspend.id, status: 'SUSPENDED' })}
+        isLoading={updateStatus.isPending}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/apiClient';
-import { PageSpinner } from '../../components/Spinner';
+import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 
 interface AuditLog {
@@ -26,19 +26,19 @@ export function AuditLogs(): JSX.Element {
       <h1 className="text-2xl font-semibold text-slate-900">Audit logs</h1>
 
       {isLoading || !data ? (
-        <PageSpinner />
+        <SkeletonRows count={10} />
       ) : data.items.length === 0 ? (
-        <EmptyState title="No audit events yet" />
+        <EmptyState title="No audit events yet" description="Security-relevant actions across the platform will appear here as they happen." />
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Time</th>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Action</th>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Entity</th>
-                  <th className="px-4 py-2 text-left font-medium text-slate-500">Actor</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Time</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Action</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Entity</th>
+                  <th scope="col" className="px-4 py-2 text-left font-medium text-slate-500">Actor</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -53,10 +53,11 @@ export function AuditLogs(): JSX.Element {
               </tbody>
             </table>
           </div>
-          <div className="flex justify-center gap-2">
+          <nav aria-label="Pagination" className="flex items-center justify-center gap-3">
             <button type="button" className="btn-secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</button>
+            <span aria-live="polite" className="text-sm text-slate-500">Page {page}</span>
             <button type="button" className="btn-secondary" disabled={data.items.length < data.pageSize} onClick={() => setPage((p) => p + 1)}>Next</button>
-          </div>
+          </nav>
         </>
       )}
     </div>

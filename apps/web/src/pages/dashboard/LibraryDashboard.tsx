@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
-import { PageSpinner } from '../../components/Spinner';
 import { EmptyState } from '../../components/EmptyState';
+import { SkeletonStatCardRow, SkeletonRows } from '../../components/Skeleton';
 
 interface LibraryDashboardResponse {
   pendingReview: Array<{ id: string; title: string; status: string }>;
@@ -30,7 +30,21 @@ export function LibraryDashboard(): JSX.Element {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['library-dashboard'] }),
   });
 
-  if (isLoading || !data) return <PageSpinner />;
+  if (isLoading || !data) {
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900">Library dashboard</h1>
+            <p className="text-slate-600">Papers awaiting review, and recent verification activity.</p>
+          </div>
+          <Link to="/app/library/queue" className="btn-primary">Open review queue</Link>
+        </div>
+        <SkeletonStatCardRow count={3} />
+        <SkeletonRows count={5} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

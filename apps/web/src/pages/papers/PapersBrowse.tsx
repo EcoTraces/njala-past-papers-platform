@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { api } from '../../lib/apiClient';
 import { EmptyState } from '../../components/EmptyState';
-import { PageSpinner } from '../../components/Spinner';
+import { SkeletonCardGrid } from '../../components/Skeleton';
 import { StatusBadge } from '../../components/StatusBadge';
 import type { PaperStatus } from '@njala/shared';
 import { EXAMINATION_TYPES } from '@njala/shared';
@@ -207,9 +207,13 @@ export function PapersBrowse(): JSX.Element {
       </div>
 
       {isLoading ? (
-        <PageSpinner />
+        <SkeletonCardGrid count={6} />
       ) : !data || data.items.length === 0 ? (
-        <EmptyState title="No papers found" description="Try a different search term or filter." />
+        <EmptyState
+          title="No papers found"
+          description={activeFilterCount > 0 ? 'Try a different search term, or clear your filters to see more results.' : 'No papers have been published yet.'}
+          action={activeFilterCount > 0 ? <button type="button" className="btn-secondary" onClick={clearFilters}>Clear filters</button> : undefined}
+        />
       ) : (
         <>
           <p className="text-sm text-slate-500">{data.total} paper{data.total === 1 ? '' : 's'} found</p>

@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
-import { PageSpinner } from '../../components/Spinner';
 import { EmptyState } from '../../components/EmptyState';
+import { SkeletonStatCardRow, SkeletonRows } from '../../components/Skeleton';
 
 interface AdminDashboardResponse {
   totalUsers: number;
@@ -29,7 +29,19 @@ export function AdminDashboard(): JSX.Element {
     queryFn: () => api.get<AdminDashboardResponse>('/admin/dashboard'),
   });
 
-  if (isLoading || !data) return <PageSpinner />;
+  if (isLoading || !data) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900">Administrator dashboard</h1>
+          <p className="text-slate-600">System-wide overview.</p>
+        </div>
+        <SkeletonStatCardRow count={4} />
+        <SkeletonStatCardRow count={4} />
+        <SkeletonRows count={5} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

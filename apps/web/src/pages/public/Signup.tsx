@@ -60,14 +60,27 @@ export function Signup(): JSX.Element {
 
           <div>
             <label className="label" htmlFor="fullName">Full name</label>
-            <input id="fullName" className="input" {...register('fullName')} />
-            {errors.fullName && <p className="mt-1 text-sm text-red-600">{errors.fullName.message}</p>}
+            <input
+              id="fullName"
+              className="input"
+              aria-invalid={errors.fullName ? true : undefined}
+              aria-describedby={errors.fullName ? 'fullName-error' : undefined}
+              {...register('fullName')}
+            />
+            {errors.fullName && <p id="fullName-error" role="alert" className="mt-1 text-sm text-red-600">{errors.fullName.message}</p>}
           </div>
 
           <div>
             <label className="label" htmlFor="studentId">Student ID</label>
-            <input id="studentId" className="input" autoComplete="username" {...register('studentId')} />
-            {errors.studentId && <p className="mt-1 text-sm text-red-600">{errors.studentId.message}</p>}
+            <input
+              id="studentId"
+              className="input"
+              autoComplete="username"
+              aria-invalid={errors.studentId ? true : undefined}
+              aria-describedby={errors.studentId ? 'studentId-error' : undefined}
+              {...register('studentId')}
+            />
+            {errors.studentId && <p id="studentId-error" role="alert" className="mt-1 text-sm text-red-600">{errors.studentId.message}</p>}
           </div>
 
           <div>
@@ -75,7 +88,13 @@ export function Signup(): JSX.Element {
             {programmesQuery.isLoading ? (
               <Spinner label="Loading programmes" />
             ) : (
-              <select id="programmeId" className="input" {...register('programmeId')}>
+              <select
+                id="programmeId"
+                className="input"
+                aria-invalid={errors.programmeId ? true : undefined}
+                aria-describedby={errors.programmeId ? 'programmeId-error' : undefined}
+                {...register('programmeId')}
+              >
                 <option value="">Select your programme</option>
                 {programmesQuery.data?.items.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -84,25 +103,47 @@ export function Signup(): JSX.Element {
                 ))}
               </select>
             )}
-            {errors.programmeId && <p className="mt-1 text-sm text-red-600">{errors.programmeId.message}</p>}
+            {errors.programmeId && <p id="programmeId-error" role="alert" className="mt-1 text-sm text-red-600">{errors.programmeId.message}</p>}
           </div>
 
           <div>
             <label className="label" htmlFor="entryYear">Entry year</label>
-            <input id="entryYear" type="number" className="input" {...register('entryYear', { valueAsNumber: true })} />
-            {errors.entryYear && <p className="mt-1 text-sm text-red-600">{errors.entryYear.message}</p>}
+            <input
+              id="entryYear"
+              type="number"
+              className="input"
+              aria-invalid={errors.entryYear ? true : undefined}
+              aria-describedby={errors.entryYear ? 'entryYear-error' : undefined}
+              {...register('entryYear', { valueAsNumber: true })}
+            />
+            {errors.entryYear && <p id="entryYear-error" role="alert" className="mt-1 text-sm text-red-600">{errors.entryYear.message}</p>}
           </div>
 
           <div>
             <label className="label" htmlFor="contactEmail">Contact email (optional, used for password resets)</label>
-            <input id="contactEmail" type="email" className="input" {...register('contactEmail')} />
-            {errors.contactEmail && <p className="mt-1 text-sm text-red-600">{errors.contactEmail.message}</p>}
+            <input
+              id="contactEmail"
+              type="email"
+              className="input"
+              aria-invalid={errors.contactEmail ? true : undefined}
+              aria-describedby={errors.contactEmail ? 'contactEmail-error' : undefined}
+              {...register('contactEmail')}
+            />
+            {errors.contactEmail && <p id="contactEmail-error" role="alert" className="mt-1 text-sm text-red-600">{errors.contactEmail.message}</p>}
           </div>
 
           <div>
             <label className="label" htmlFor="password">Password</label>
-            <input id="password" type="password" className="input" autoComplete="new-password" {...register('password')} />
-            {errors.password && <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>}
+            <input
+              id="password"
+              type="password"
+              className="input"
+              autoComplete="new-password"
+              aria-invalid={errors.password ? true : undefined}
+              aria-describedby={errors.password ? 'password-error' : undefined}
+              {...register('password')}
+            />
+            {errors.password && <p id="password-error" role="alert" className="mt-1 text-sm text-red-600">{errors.password.message}</p>}
           </div>
 
           <button type="submit" className="btn-primary w-full" disabled={isSubmitting}>

@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
-import { PageSpinner } from '../../components/Spinner';
 import { EmptyState } from '../../components/EmptyState';
+import { SkeletonStatCardRow, SkeletonRows } from '../../components/Skeleton';
 import { StatusBadge } from '../../components/StatusBadge';
 import type { PaperStatus } from '@njala/shared';
 
@@ -20,7 +20,22 @@ export function LecturerDashboard(): JSX.Element {
     queryFn: () => api.get<LecturerDashboardResponse>('/lecturer/dashboard'),
   });
 
-  if (isLoading || !data) return <PageSpinner />;
+  if (isLoading || !data) {
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900">Lecturer dashboard</h1>
+            <p className="text-slate-600">Your courses, uploaded papers and question bank.</p>
+          </div>
+          <Link to="/app/lecturer/upload" className="btn-primary">Upload paper</Link>
+        </div>
+        <SkeletonStatCardRow count={3} />
+        <SkeletonStatCardRow count={3} />
+        <SkeletonRows count={4} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

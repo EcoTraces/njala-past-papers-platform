@@ -74,16 +74,31 @@ export function Login(): JSX.Element {
               <form className="space-y-4" onSubmit={onStudentSubmit} noValidate>
                 <div>
                   <label className="label" htmlFor="studentId">Student ID</label>
-                  <input id="studentId" className="input" autoComplete="username" {...studentForm.register('studentId')} />
+                  <input
+                    id="studentId"
+                    className="input"
+                    autoComplete="username"
+                    aria-invalid={studentForm.formState.errors.studentId ? true : undefined}
+                    aria-describedby={studentForm.formState.errors.studentId ? 'studentId-error' : undefined}
+                    {...studentForm.register('studentId')}
+                  />
                   {studentForm.formState.errors.studentId && (
-                    <p className="mt-1 text-sm text-red-600">{studentForm.formState.errors.studentId.message}</p>
+                    <p id="studentId-error" role="alert" className="mt-1 text-sm text-red-600">{studentForm.formState.errors.studentId.message}</p>
                   )}
                 </div>
                 <div>
                   <label className="label" htmlFor="student-password">Password</label>
-                  <input id="student-password" type="password" className="input" autoComplete="current-password" {...studentForm.register('password')} />
+                  <input
+                    id="student-password"
+                    type="password"
+                    className="input"
+                    autoComplete="current-password"
+                    aria-invalid={studentForm.formState.errors.password ? true : undefined}
+                    aria-describedby={studentForm.formState.errors.password ? 'student-password-error' : undefined}
+                    {...studentForm.register('password')}
+                  />
                   {studentForm.formState.errors.password && (
-                    <p className="mt-1 text-sm text-red-600">{studentForm.formState.errors.password.message}</p>
+                    <p id="student-password-error" role="alert" className="mt-1 text-sm text-red-600">{studentForm.formState.errors.password.message}</p>
                   )}
                 </div>
                 <button type="submit" className="btn-primary w-full" disabled={studentForm.formState.isSubmitting}>
@@ -99,16 +114,32 @@ export function Login(): JSX.Element {
               <form className="space-y-4" onSubmit={onStaffSubmit} noValidate>
                 <div>
                   <label className="label" htmlFor="email">Email</label>
-                  <input id="email" type="email" className="input" autoComplete="username" {...staffForm.register('email')} />
+                  <input
+                    id="email"
+                    type="email"
+                    className="input"
+                    autoComplete="username"
+                    aria-invalid={staffForm.formState.errors.email ? true : undefined}
+                    aria-describedby={staffForm.formState.errors.email ? 'email-error' : undefined}
+                    {...staffForm.register('email')}
+                  />
                   {staffForm.formState.errors.email && (
-                    <p className="mt-1 text-sm text-red-600">{staffForm.formState.errors.email.message}</p>
+                    <p id="email-error" role="alert" className="mt-1 text-sm text-red-600">{staffForm.formState.errors.email.message}</p>
                   )}
                 </div>
                 <div>
                   <label className="label" htmlFor="staff-password">Password</label>
-                  <input id="staff-password" type="password" className="input" autoComplete="current-password" {...staffForm.register('password')} />
+                  <input
+                    id="staff-password"
+                    type="password"
+                    className="input"
+                    autoComplete="current-password"
+                    aria-invalid={staffForm.formState.errors.password ? true : undefined}
+                    aria-describedby={staffForm.formState.errors.password ? 'staff-password-error' : undefined}
+                    {...staffForm.register('password')}
+                  />
                   {staffForm.formState.errors.password && (
-                    <p className="mt-1 text-sm text-red-600">{staffForm.formState.errors.password.message}</p>
+                    <p id="staff-password-error" role="alert" className="mt-1 text-sm text-red-600">{staffForm.formState.errors.password.message}</p>
                   )}
                 </div>
                 <button type="submit" className="btn-primary w-full" disabled={staffForm.formState.isSubmitting}>

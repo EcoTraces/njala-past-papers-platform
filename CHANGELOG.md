@@ -572,3 +572,75 @@ See TASK.md ("Findings from Loop 03") for the full writeup.
 - 131 Node tests (up from 122), 27/27 RLS/RBAC scenarios (unchanged),
   11/11 Playwright e2e (up from 8), 16/16 Python tests + `ruff check`
   clean, production build clean.
+
+## [Unreleased] - UI/UX quality audit and hardening (Loop 13)
+
+Preceded by a full-codebase survey (32 pages, every shared component)
+before any edit - every fix below targets a gap the survey actually
+found, not a generic guess.
+
+### Added
+
+- `ConfirmDialog.tsx`: a focus-trapped, accessible confirmation dialog
+  (built on `@radix-ui/react-dialog`, previously installed but unused
+  anywhere) - closes on Escape/backdrop-click/Cancel, auto-focuses
+  Cancel rather than the confirm button. Wired into every destructive
+  action that previously fired immediately with zero confirmation:
+  approve/publish/archive/reject a paper (`PaperDetail.tsx`), suspend a
+  user (`AdminUsers.tsx`), reject a question (`QuestionBank.tsx`).
+- `Skeleton.tsx`: a base skeleton block plus `SkeletonStatCardRow`/
+  `SkeletonCardGrid`/`SkeletonRows` composites, applied to all four
+  dashboards, paper search, and both admin tables - previously every
+  loading state in the app (37 occurrences across 21 pages) was the
+  same full-page-blanking spinner.
+- `PublicHeader.tsx`: shared header for every public page, with a real
+  accessible mobile hamburger menu. Previously About/Help/Contact
+  simply vanished below 640px with no alternate way to reach them - a
+  real gap given many students access the platform on a phone.
+- A skip-to-content link and full keyboard/focus handling for
+  `AppLayout.tsx`'s mobile nav (Escape closes it, route changes close
+  it, `aria-expanded`/`aria-controls` on the toggle, focus moves into
+  the drawer on open and back to the toggle on close) - none of that
+  existed before.
+- A visible progress bar and per-question answered/unanswered badges in
+  `PracticeSession.tsx` (previously text-only), plus a submit
+  confirmation dialog that specifically warns when questions are still
+  unanswered.
+- `ConfirmDialog.test.tsx` (5 component tests) and
+  `breakpoint-sweep.spec.ts` (35 Playwright tests: every public page at
+  the five breakpoints named in the brief - 360/390/768/1024/1440px -
+  asserting no horizontal overflow at any of them).
+
+### Fixed
+
+- `PaperDetail.tsx`'s "View"/"Download" buttons had no loading state
+  and no error handling at all - a slow network made a click look like
+  nothing happened, and a failed request (expired session, network
+  error, a 403) was silently swallowed with the viewer section simply
+  never appearing. Both now show loading state and a real error
+  message on failure.
+- `AdminUsers.tsx`/`AuditLogs.tsx` (the only two real `<table>`s in the
+  app) had no `scope="col"` on any header - fixed both, plus added a
+  live "Page N" indicator to `AuditLogs.tsx`'s pagination and
+  screen-reader context to `AdminUsers.tsx`'s otherwise-identical
+  "Suspend"/"Activate" buttons.
+- `Login.tsx`/`Signup.tsx` form fields had zero `aria-invalid`/
+  `aria-describedby` wiring (a repo-wide grep found none anywhere) -
+  error text was rendered but never associated with its field for
+  assistive tech. Wired both forms up field by field.
+- `PracticeSession.tsx`'s text-based answer inputs silently dropped a
+  cleared answer on blur (an `e.target.value &&` guard no-op'd an
+  emptied field) - fixed for SHORT_ANSWER/ESSAY/MIXED (schema-verified
+  safe: `answerText` accepts an empty string); left as-is for NUMERICAL,
+  which cannot represent "cleared" without a backend contract change.
+- `PapersBrowse.tsx`'s empty state gave no path forward on a
+  zero-result search - added a "Clear filters" action and a message
+  that distinguishes "no results for your search" from "nothing
+  published yet."
+
+### Verified
+
+- 136 Node+web unit tests (up from 131), 27/27 RLS/RBAC scenarios
+  (unchanged - no schema/policy changes this loop), 47/47 Playwright
+  e2e (up from 11), production build clean, lint clean (including
+  `eslint-plugin-jsx-a11y`).

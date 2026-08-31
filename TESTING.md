@@ -182,6 +182,17 @@ splitting the configs.
 npm run test --workspace apps/web
 ```
 
+- `ConfirmDialog.test.tsx` (Loop 13) - the confirmation dialog used by
+  every destructive action in the app (approve/publish/archive/reject
+  a paper, suspend a user, reject a question). Covers: renders nothing
+  when closed; the confirm button calls `onConfirm` and the dialog is
+  correctly labelled (`role="alertdialog"` with an accessible name);
+  Cancel calls `onOpenChange(false)` without ever calling `onConfirm`;
+  Escape closes it; `isLoading` disables the confirm button and swaps
+  its label. Uses `fireEvent` (not `@testing-library/user-event`,
+  which isn't a dependency here) - sufficient for click/keydown, which
+  is all these interactions need.
+
 ## apps/web - end-to-end tests (Playwright)
 
 ```bash
@@ -208,7 +219,13 @@ while signed out), and responsive layout (`responsive-layout.spec.ts`:
 the landing page must not overflow horizontally at a 375px mobile
 viewport, and must show the full desktop nav at 1440px - a regression
 test for a real bug found during a manual screenshot audit, see
-TASK.md "Findings from Loop 05"). Flows that need a real account
+TASK.md "Findings from Loop 05"; extended in Loop 13 with coverage of
+the new shared `PublicHeader`'s mobile menu open/Escape-close/focus
+behavior), and `breakpoint-sweep.spec.ts` (Loop 13 - 35 tests: every
+public page at all five breakpoints the project brief calls out -
+360/390/768/1024/1440px - asserting no horizontal overflow at any of
+them; only the landing page had any breakpoint coverage before this).
+Flows that need a real account
 (login, upload, practice, review workflow) need a seeded Supabase test
 project - confirmed still genuinely out of reach in Loop 12: `apps/api`
 signs in via Supabase Auth's hosted GoTrue service over HTTPS, and

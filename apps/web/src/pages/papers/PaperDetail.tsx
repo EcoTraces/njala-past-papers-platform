@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
-import { Bookmark, BookmarkCheck, Download, FileWarning } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Download, FileWarning, Loader2 } from 'lucide-react';
 import { api, ApiError } from '../../lib/apiClient';
 import { useAuth } from '../../hooks/useAuth';
 import { PageSpinner } from '../../components/Spinner';
 import { StatusBadge } from '../../components/StatusBadge';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import type { PaperStatus } from '@njala/shared';
 
 interface PaperDetailResponse {
@@ -26,14 +27,20 @@ interface PaperDetailResponse {
   semesters: { name: string } | null;
 }
 
+type PendingAction = 'approve' | 'publish' | 'archive' | 'reject' | null;
+
 export function PaperDetail(): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const { hasRole, user } = useAuth();
   const queryClient = useQueryClient();
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   const { data: paper, isLoading } = useQuery({
     queryKey: ['paper', id],
@@ -53,9 +60,13 @@ export function PaperDetail(): JSX.Element {
       setActionError(null);
       setShowRejectForm(false);
       setRejectReason('');
+      setPendingAction(null);
       invalidate();
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.message : 'Action failed'),
+    onError: (err) => {
+      setActionError(err instanceof ApiError ? err.message : 'Action failed. Please try again.');
+      setPendingAction(null);
+    },
   });
 
   const bookmark = useMutation({
@@ -63,13 +74,29 @@ export function PaperDetail(): JSX.Element {
   });
 
   const loadViewer = async () => {
-    const res = await api.get<{ url: string }>(`/papers/${id}/download-url`);
-    setViewerUrl(res.url);
+    setViewerError(null);
+    setViewerLoading(true);
+    try {
+      const res = await api.get<{ url: string }>(`/papers/${id}/download-url`);
+      setViewerUrl(res.url);
+    } catch (err) {
+      setViewerError(err instanceof ApiError ? err.message : 'Could not load the document preview. Please try again.');
+    } finally {
+      setViewerLoading(false);
+    }
   };
 
   const download = async () => {
-    const res = await api.get<{ url: string }>(`/papers/${id}/download-url`);
-    window.open(res.url, '_blank', 'noopener,noreferrer');
+    setViewerError(null);
+    setDownloadLoading(true);
+    try {
+      const res = await api.get<{ url: string }>(`/papers/${id}/download-url`);
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setViewerError(err instanceof ApiError ? err.message : 'Could not start the download. Please try again.');
+    } finally {
+      setDownloadLoading(false);
+    }
   };
 
   if (isLoading || !paper) return <PageSpinner />;
@@ -86,18 +113,26 @@ export function PaperDetail(): JSX.Element {
             <span className="badge bg-slate-100 text-slate-700">{paper.paper_type}</span>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {hasRole('STUDENT') && (
             <button type="button" className="btn-secondary" onClick={() => bookmark.mutate(true)}>
-              {bookmark.isSuccess ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />} Bookmark
+              {bookmark.isSuccess ? <BookmarkCheck className="h-4 w-4" aria-hidden="true" /> : <Bookmark className="h-4 w-4" aria-hidden="true" />} Bookmark
             </button>
           )}
-          <button type="button" className="btn-secondary" onClick={() => void loadViewer()}>View</button>
-          <button type="button" className="btn-primary" onClick={() => void download()}>
-            <Download className="h-4 w-4" aria-hidden="true" /> Download
+          <button type="button" className="btn-secondary" onClick={() => void loadViewer()} disabled={viewerLoading}>
+            {viewerLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+            {viewerLoading ? 'Loading…' : 'View'}
+          </button>
+          <button type="button" className="btn-primary" onClick={() => void download()} disabled={downloadLoading}>
+            {downloadLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+            Download
           </button>
         </div>
       </div>
+
+      {viewerError && (
+        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{viewerError}</p>
+      )}
 
       <dl className="grid grid-cols-2 gap-4 rounded-lg border border-slate-200 bg-white p-5 text-sm sm:grid-cols-4">
         <Field label="Faculty" value={paper.faculties?.name} />
@@ -114,6 +149,10 @@ export function PaperDetail(): JSX.Element {
           <FileWarning className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span>Rejected: {paper.rejection_reason}</span>
         </div>
+      )}
+
+      {viewerLoading && !viewerUrl && (
+        <div className="skeleton h-[70vh] w-full" />
       )}
 
       {viewerUrl && (
@@ -134,16 +173,16 @@ export function PaperDetail(): JSX.Element {
               <button type="button" className="btn-secondary" onClick={() => transition.mutate('review')}>Start review</button>
             )}
             {isReviewer && paper.status === 'UNDER_REVIEW' && (
-              <button type="button" className="btn-primary" onClick={() => transition.mutate('approve')}>Approve</button>
+              <button type="button" className="btn-primary" onClick={() => setPendingAction('approve')}>Approve</button>
             )}
             {isReviewer && paper.status === 'APPROVED' && (
-              <button type="button" className="btn-primary" onClick={() => transition.mutate('publish')}>Publish</button>
+              <button type="button" className="btn-primary" onClick={() => setPendingAction('publish')}>Publish</button>
             )}
             {isReviewer && ['SUBMITTED', 'UNDER_REVIEW'].includes(paper.status) && (
               <button type="button" className="btn-danger" onClick={() => setShowRejectForm(true)}>Reject</button>
             )}
             {isReviewer && paper.status === 'PUBLISHED' && (
-              <button type="button" className="btn-secondary" onClick={() => transition.mutate('archive')}>Archive</button>
+              <button type="button" className="btn-secondary" onClick={() => setPendingAction('archive')}>Archive</button>
             )}
           </div>
 
@@ -152,13 +191,51 @@ export function PaperDetail(): JSX.Element {
               <label className="label" htmlFor="reject-reason">Rejection reason</label>
               <textarea id="reject-reason" className="input" rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
               <div className="flex gap-2">
-                <button type="button" className="btn-danger" disabled={!rejectReason} onClick={() => transition.mutate('reject')}>Confirm rejection</button>
+                <button type="button" className="btn-danger" disabled={!rejectReason} onClick={() => setPendingAction('reject')}>Confirm rejection</button>
                 <button type="button" className="btn-secondary" onClick={() => setShowRejectForm(false)}>Cancel</button>
               </div>
             </div>
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingAction === 'approve'}
+        onOpenChange={(open) => !open && setPendingAction(null)}
+        title="Approve this paper?"
+        description="The paper moves to Approved status and becomes ready to publish. Reviewers will still be able to review it again before it goes live."
+        confirmLabel="Approve"
+        onConfirm={() => transition.mutate('approve')}
+        isLoading={transition.isPending}
+      />
+      <ConfirmDialog
+        open={pendingAction === 'publish'}
+        onOpenChange={(open) => !open && setPendingAction(null)}
+        title="Publish this paper?"
+        description="Publishing makes this paper immediately visible and downloadable to every student on the platform. Make sure the content and metadata are correct first."
+        confirmLabel="Publish"
+        onConfirm={() => transition.mutate('publish')}
+        isLoading={transition.isPending}
+      />
+      <ConfirmDialog
+        open={pendingAction === 'archive'}
+        onOpenChange={(open) => !open && setPendingAction(null)}
+        title="Archive this paper?"
+        description="Archiving removes this paper from student search and browsing. It can be found again later, but won't be discoverable until it's republished."
+        confirmLabel="Archive"
+        onConfirm={() => transition.mutate('archive')}
+        isLoading={transition.isPending}
+      />
+      <ConfirmDialog
+        open={pendingAction === 'reject'}
+        onOpenChange={(open) => !open && setPendingAction(null)}
+        title="Reject this paper?"
+        description={`The uploader will see this reason and the paper returns to draft: "${rejectReason}"`}
+        confirmLabel="Reject paper"
+        destructive
+        onConfirm={() => transition.mutate('reject')}
+        isLoading={transition.isPending}
+      />
     </div>
   );
 }

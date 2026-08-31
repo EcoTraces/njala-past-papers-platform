@@ -74,6 +74,21 @@ recorded in this repository's commit history - not just written.
   actions), admin (users, academic structure, audit logs).
 - Role-based route protection, accessible form validation, loading/
   empty states throughout.
+- UI/UX hardening pass (Loop 13, preceded by a full 32-page codebase
+  survey): a real confirmation-dialog component (`ConfirmDialog.tsx`,
+  Radix-based) wired into every previously-unconfirmed destructive
+  action; skeleton loaders (`Skeleton.tsx`) replacing the single
+  full-page-blanking spinner every page used before; a shared,
+  keyboard-accessible mobile nav for both the authenticated app shell
+  and the public pages (skip-link, Escape-close, route-change-close,
+  proper `aria-expanded`/`aria-controls`); `aria-invalid`/
+  `aria-describedby` wired into the two highest-traffic forms (Login/
+  Signup); accessible table headers (`scope="col"`) on both real
+  `<table>`s in the app; a real loading/error state for the PDF
+  preview/download flow (previously a silently-swallowed unhandled
+  promise rejection); a visible progress bar and submit-confirmation
+  in the practice session UI. See "Findings from Loop 13" in TASK.md
+  for the full list with what each fix actually replaced.
 
 **Infra**
 - Dockerfiles (api, web, document-service), docker-compose for local
@@ -140,6 +155,26 @@ recorded in this repository's commit history - not just written.
 - Content moderation / duplicate-record management beyond the
   checksum-based unique-index duplicate prevention is not built as a
   distinct workflow.
+- `PracticeSession.tsx` has no visible exam-duration countdown timer -
+  `duration_minutes` exists on papers but nothing in the practice UI
+  surfaces it as a running clock. Deliberately not added in Loop 13:
+  a real timer needs a product decision about auto-submit-on-expiry
+  behavior (does time run out mid-question? does it warn first?),
+  not just a UI component.
+- `PracticeResults.tsx` shows marks-awarded per question but no
+  answer-review (what the student actually answered vs. the correct
+  answer) - just a colored correct/incorrect icon and a mark. Adding
+  this needs the results endpoint to actually return that comparison
+  data, which it currently doesn't.
+- `darkMode: 'media'` is configured in `tailwind.config.ts` but no page
+  uses any `dark:` variant - dark mode is switched on in config but not
+  actually implemented anywhere.
+- `aria-invalid`/`aria-describedby` wiring (Loop 13) only covers
+  `Login.tsx`/`Signup.tsx` - the admin/upload forms
+  (`AdminUsers.tsx`'s staff-provisioning form, `UploadPaper.tsx`,
+  `AcademicStructure.tsx`) still rely on native `required` plus a
+  single top-level error banner after a failed submission, with no
+  per-field inline validation feedback at all.
 
 **Known residual risk (Loop 11)**
 - After Loop 11's fix, a student can still read `question_options.

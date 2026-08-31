@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
-import { PageSpinner } from '../../components/Spinner';
 import { EmptyState } from '../../components/EmptyState';
+import { SkeletonStatCardRow, SkeletonCardGrid, SkeletonRows } from '../../components/Skeleton';
 import { BookOpen, Bookmark } from 'lucide-react';
 
 interface StudentDashboardResponse {
@@ -20,7 +20,19 @@ export function StudentDashboard(): JSX.Element {
     queryFn: () => api.get<StudentDashboardResponse>('/student/dashboard'),
   });
 
-  if (isLoading || !data) return <PageSpinner />;
+  if (isLoading || !data) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900">Your dashboard</h1>
+          <p className="text-slate-600">Recently published papers, your bookmarks and recent practice attempts.</p>
+        </div>
+        <SkeletonStatCardRow count={2} />
+        <SkeletonCardGrid count={3} />
+        <SkeletonRows count={3} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
