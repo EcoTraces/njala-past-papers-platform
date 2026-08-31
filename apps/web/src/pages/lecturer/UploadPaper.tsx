@@ -1,13 +1,10 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { EXAMINATION_TYPES, PAPER_TYPES } from '@njala/shared';
 import { api, ApiError } from '../../lib/apiClient';
 import { PageSpinner } from '../../components/Spinner';
-
-interface Course { id: string; code: string; title: string; }
-interface AcademicYear { id: string; name: string; }
-interface Semester { id: string; name: string; academic_year_id: string; }
+import { useCourses, useAcademicYears, useSemesters } from '../../hooks/useReferenceData';
 
 export function UploadPaper(): JSX.Element {
   const navigate = useNavigate();
@@ -25,9 +22,9 @@ export function UploadPaper(): JSX.Element {
     durationMinutes: '',
   });
 
-  const coursesQuery = useQuery({ queryKey: ['courses'], queryFn: () => api.get<{ items: Course[] }>('/courses') });
-  const yearsQuery = useQuery({ queryKey: ['academic-years'], queryFn: () => api.get<{ items: AcademicYear[] }>('/academic-years') });
-  const semestersQuery = useQuery({ queryKey: ['semesters'], queryFn: () => api.get<{ items: Semester[] }>('/semesters') });
+  const coursesQuery = useCourses();
+  const yearsQuery = useAcademicYears();
+  const semestersQuery = useSemesters();
 
   const upload = useMutation({
     mutationFn: async () => {

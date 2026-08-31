@@ -1,14 +1,9 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../../lib/apiClient';
 import { PageSpinner } from '../../components/Spinner';
-
-interface Course {
-  id: string;
-  code: string;
-  title: string;
-}
+import { useCourses } from '../../hooks/useReferenceData';
 
 interface PracticeSession {
   id: string;
@@ -20,7 +15,7 @@ export function PracticeStart(): JSX.Element {
   const [questionCount, setQuestionCount] = useState(10);
   const [error, setError] = useState<string | null>(null);
 
-  const coursesQuery = useQuery({ queryKey: ['courses'], queryFn: () => api.get<{ items: Course[] }>('/courses') });
+  const coursesQuery = useCourses();
 
   const startSession = useMutation({
     mutationFn: () => api.post<PracticeSession>('/practice/sessions', { courseId, questionCount }),

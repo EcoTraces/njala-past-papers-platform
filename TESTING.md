@@ -268,6 +268,14 @@ and rejection of a non-PDF buffer.
   proof that extraction is offloaded to a worker thread rather than
   blocking the service's own event loop, via a thread that only
   releases once a concurrently-scheduled coroutine has actually run.
+  Also `test_process_job_bounds_concurrent_extraction` (Loop 14) -
+  proves `max_concurrent_processing_jobs`'s semaphore actually holds
+  under a real burst of concurrent jobs (submits 3x the configured
+  limit and asserts the observed peak never exceeds it), using a
+  `threading.Lock`-guarded counter rather than an asyncio primitive,
+  since the faked `extract_document` runs in a genuine OS thread via
+  `asyncio.to_thread` - an `asyncio.Lock` wouldn't correctly synchronize
+  across threads.
 
 See TASK.md "Findings from Loop 07" for what these caught: `PROCESSING`
 was a dead enum value nothing ever set, and `extract_document` ran

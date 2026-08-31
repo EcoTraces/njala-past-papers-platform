@@ -184,3 +184,50 @@ async def test_process_job_offloads_extraction_so_the_event_loop_stays_responsiv
     # coroutine concurrently) rather than the whole job waiting out the
     # full 2s because extraction had the loop pinned.
     assert elapsed < 1.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_process_job_bounds_concurrent_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Loop 14 perf fix: settings.max_concurrent_processing_jobs bounds
+    how many jobs run extraction at once, so a burst of simultaneous
+    uploads can't spawn unboundedly many concurrent PyMuPDF/Tesseract
+    workloads (each holding a full file plus decoded page pixmaps in
+    memory) in this single-process service. Submits well more jobs at
+    once than the configured limit and proves the peak number of
+    concurrently-running extractions never exceeds it - using a real
+    threading.Lock-guarded counter, since extract_document runs in an
+    actual OS thread via asyncio.to_thread, not just a coroutine.
+    """
+    import threading
+    import time
+
+    from app.services.pdf_processing import ExtractionResult
+
+    file_url = "https://storage.example.com/paper.pdf"
+    respx.get(file_url).mock(return_value=httpx.Response(200, content=_build_text_pdf()))
+    respx.post(settings.node_api_callback_url).mock(return_value=httpx.Response(204))
+
+    current = 0
+    peak = 0
+    counter_lock = threading.Lock()
+
+    def counting_extract(_file_bytes: bytes) -> ExtractionResult:
+        nonlocal current, peak
+        with counter_lock:
+            current += 1
+            peak = max(peak, current)
+        time.sleep(0.05)
+        with counter_lock:
+            current -= 1
+        return ExtractionResult(page_count=1, extracted_text="ok", ocr_used=False)
+
+    monkeypatch.setattr("app.routers.jobs.extract_document", counting_extract)
+
+    job_count = settings.max_concurrent_processing_jobs * 3
+    await asyncio.gather(*(_process_job(_job(file_url)) for _ in range(job_count)))
+
+    assert peak <= settings.max_concurrent_processing_jobs, (
+        f"expected at most {settings.max_concurrent_processing_jobs} concurrent extractions, saw {peak}"
+    )
+    assert peak >= 2, "extractions never overlapped at all - test setup may be broken (or accidentally serialized)"

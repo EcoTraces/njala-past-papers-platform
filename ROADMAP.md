@@ -45,7 +45,22 @@ recorded in this repository's commit history - not just written.
   authenticated callback, and retry handling for recoverable failures
   (both a dispatch-time retry-with-backoff and an automatic re-queue of
   a bounded number of recoverable processing failures) - see "Findings
-  from Loop 07" in TASK.md.
+  from Loop 07" in TASK.md. A concurrency semaphore (`max_concurrent_
+  processing_jobs`, default 3) now bounds how many jobs run extraction
+  at once (Loop 14) - previously unbounded, risking memory exhaustion
+  under a burst of simultaneous uploads in this single-process service.
+- Performance pass (Loop 14, measure-first): removed an unnecessary
+  full-OCR-text payload from every paper-detail view, capped two
+  previously-unbounded list endpoints, scoped an over-fetching
+  question-bank list query, and gave near-static reference data
+  (courses/academic-years/semesters) a realistic cache lifetime instead
+  of sharing the generic 30s default. Several areas were checked and
+  found already correct (no changes made): N+1 query patterns, FK
+  index coverage, full-text-search setup, Supabase client construction,
+  and frontend render/lazy-loading hotspots. See "Findings from
+  Loop 14" in TASK.md for the full list, including what was
+  deliberately left as a documented future scaling item rather than
+  fixed speculatively.
 - Search/discovery: filter by course/course-code/faculty/department/
   programme/academic-year/semester/examination-type, full-text keyword
   search over title + OCR-extracted text, and a relevance-ranked sort
@@ -116,6 +131,25 @@ recorded in this repository's commit history - not just written.
 - `docs/deployment/bootstrap-admin.md` describes creating the very
   first SUPER_ADMIN by hand (deliberately - no code path auto-creates
   one); it hasn't been run against a live project either.
+
+**Performance / scaling (Loop 14)**
+- `admin_dashboard_stats()`'s two `SUM()` aggregates do a full scan of
+  `examination_papers` on every admin-dashboard load - fine at today's
+  catalogue size, will degrade linearly as it grows. Not materialized/
+  counter-cached: no measured regression exists yet, only a reasoned
+  prediction, and this codebase's precedent (Loop 08's RLS/index fix)
+  is to fix performance issues once a realistic-volume measurement
+  actually shows one. Revisit with real data once the catalogue is
+  large enough to matter.
+- `@fastify/rate-limit` uses its default in-memory store, which won't
+  stay consistent across multiple API instances if this is ever
+  horizontally scaled (each instance would enforce its own independent
+  counter). Not an issue for the current single-instance Render
+  deployment; a shared store (Redis) is the fix if/when that changes.
+- Native PDF text extraction has no page-count cap (OCR does, at 60
+  pages) - deliberately not added, since it would risk silently
+  dropping real content from a legitimately long past paper, and the
+  existing 120s processing timeout already bounds the worst case.
 
 **Integrations**
 - Transactional email is a documented pluggable interface

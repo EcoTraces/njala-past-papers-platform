@@ -644,3 +644,80 @@ found, not a generic guess.
   (unchanged - no schema/policy changes this loop), 47/47 Playwright
   e2e (up from 11), production build clean, lint clean (including
   `eslint-plugin-jsx-a11y`).
+
+## [Unreleased] - Performance audit and optimization (Loop 14)
+
+Measured first: a full-codebase survey (frontend bundle/caching/
+rendering, backend query patterns, database index coverage, Python
+OCR/concurrency) ran before any change. Several checked areas came
+back clean and were deliberately left untouched - see "Investigated,
+not fixed" below.
+
+### Fixed
+
+- `GET /api/papers/:id` used `select('*')`, pulling the full OCR'd
+  document body (`extracted_text`) and `search_vector` on every single
+  paper-detail view despite the frontend never reading either field.
+  Scoped to an explicit column list.
+- `GET /api/papers/mine/uploaded` and `GET /api/papers/bookmarks/mine`
+  had no `.range()`/`.limit()` at all - capped both at 200 rows.
+- `GET /api/questions` (list view) used `select('*')`, over-fetching
+  `expected_answer`/`explanation`/`numerical_tolerance` on every row
+  even though the list UI never displays them. Scoped to the columns
+  actually rendered; the single-question detail view is unchanged.
+- `courses`/`academic-years`/`semesters` reference data shared the
+  same 30s global React Query `staleTime` as everything else despite
+  changing rarely, causing redundant refetches across page navigation.
+  Extracted shared hooks (`hooks/useReferenceData.ts`) with a 10-minute
+  `staleTime`, replacing four independent, inconsistent call sites.
+- The Python document-processing service had no concurrency bound at
+  all - a burst of simultaneous uploads could spawn unboundedly many
+  concurrent PyMuPDF/Tesseract workloads in this single-process
+  service, each holding a full file plus decoded page pixmaps in
+  memory. Added `max_concurrent_processing_jobs` (default 3) and a
+  semaphore around the download+extract body in `routers/jobs.py`.
+
+### Removed
+
+- Two confirmed-unused dependencies from `apps/web/package.json`
+  (`pdfjs-dist`, `@radix-ui/react-toast`) - zero imports anywhere,
+  already tree-shaken out of the runtime bundle, but inflating install
+  size for nothing.
+
+### Investigated, not fixed
+
+- Native PDF text extraction has no page-count cap (unlike OCR's
+  60-page cap) - deliberately not added: it would risk silently
+  dropping real content from a legitimately long past paper, and the
+  existing 120s processing timeout already bounds the worst case.
+  Trading correctness for speed here is exactly what the brief rules
+  out.
+- `admin_dashboard_stats()`'s two `SUM()` aggregates do a full scan of
+  `examination_papers` - fine at current table size, will degrade as
+  it grows, but there's no measured problem yet, only a prediction.
+  Recorded in ROADMAP.md rather than speculatively materialized.
+- `@fastify/rate-limit`'s in-memory store won't stay consistent across
+  multiple API instances if this is ever horizontally scaled - not an
+  issue for the current single-instance deployment; recorded for
+  Loop 15.
+- Confirmed already correct, nothing to fix: no N+1 query pattern
+  anywhere in the API, every FK column already indexed, full-text
+  search already trigger-maintained and GIN-indexed with the Loop 08
+  RLS fix in place, Supabase client construction already correctly
+  scoped, Analytics.tsx already the only route needing lazy-loading,
+  no unmemoized-render or missing-dependency-`useEffect` hotspots found.
+
+### Added
+
+- `test_process_job_bounds_concurrent_extraction` (Python) - proves the
+  new concurrency semaphore holds under a real burst of concurrent
+  jobs, using a `threading.Lock`-guarded counter since extraction runs
+  in an actual OS thread.
+
+### Verified
+
+- 136 Node+web unit tests (unchanged), 27/27 RLS/RBAC scenarios
+  (unchanged - no migrations this loop), 47/47 Playwright e2e
+  (unchanged), 17/17 Python tests (up from 16) + `ruff check` + `mypy`
+  clean, production build byte-size-unchanged (confirming the removed
+  dependencies were genuinely dead weight).

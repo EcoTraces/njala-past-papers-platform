@@ -108,30 +108,47 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/mine/uploaded', { preHandler: [authenticate, STAFF_UPLOAD_ROLES], schema: { tags: ['papers'], summary: 'Papers uploaded by the current user' } }, async (request) => {
+    // Previously unbounded (no .limit()/.range() at all) - a prolific
+    // lecturer's upload history has no natural ceiling, so this could
+    // grow into an unbounded response over years of use (Loop 14 perf
+    // audit). Capped rather than fully paginated: still scoped to a
+    // single user's own rows, so the realistic risk was slow/large
+    // growth over time, not an immediate problem.
     const { data, error } = await request.db
       .from('examination_papers')
       .select('id, title, status, created_at, courses(code, title)')
       .eq('uploaded_by', request.user!.id)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(200);
     if (error) throw error;
     return { items: data };
   });
 
   app.get('/bookmarks/mine', { preHandler: authenticate, schema: { tags: ['papers'], summary: 'List the current user\'s bookmarked papers' } }, async (request) => {
+    // See /mine/uploaded above - same previously-unbounded issue.
     const { data, error } = await request.db
       .from('bookmarks')
       .select('id, created_at, examination_papers(id, title, status, courses(code, title))')
       .eq('user_id', request.user!.id)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(200);
     if (error) throw error;
     return { items: data };
   });
 
   app.get('/:id', { preHandler: authenticate, schema: { tags: ['papers'] } }, async (request) => {
     const { id } = request.params as { id: string };
+    // Explicit column list, not select('*') - this table also carries
+    // extracted_text (the full OCR'd document body) and search_vector
+    // (its tsvector index source), neither of which apps/web's paper-
+    // detail page ever reads. Every single paper-detail view was
+    // pulling that full OCR text blob over the wire and out of
+    // Postgres for nothing (Loop 14 perf audit).
     const { data, error } = await request.db
       .from('examination_papers')
-      .select('*, courses(code, title), faculties(name), departments(name), academic_years(name), semesters(name)')
+      .select(
+        'id, title, status, examination_type, paper_type, examination_date, duration_minutes, rejection_reason, page_count, uploaded_by, courses(code, title), faculties(name), departments(name), academic_years(name), semesters(name)',
+      )
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;

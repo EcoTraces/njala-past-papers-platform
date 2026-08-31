@@ -900,6 +900,135 @@ is theoretical.
   loop), 47/47 Playwright e2e (up from 11), production build clean,
   lint clean (including `eslint-plugin-jsx-a11y`, already configured).
 
+## Findings from Loop 14 (performance audit and optimization)
+
+Measured before touching anything: a full-codebase survey (frontend
+bundle/caching/rendering, backend query patterns, database index
+coverage, Python OCR/concurrency) ran first, and every fix below
+targets something that survey actually found - several areas the
+survey checked (N+1 query patterns, FK index coverage, full-text-
+search setup, Supabase client construction, unmemoized-render
+hotspots) came back clean and were **not** touched, since there was
+nothing there to fix.
+
+- **`[BUG]` → fixed: `GET /api/papers/:id` (hit on every single paper-
+  detail page view) used `select('*')`, pulling `extracted_text` - the
+  full OCR'd document body - and `search_vector` over the wire and out
+  of Postgres on every view, despite `apps/web` never reading either
+  field** (confirmed via grep - the paper-detail page has no OCR-text
+  viewer). Scoped to an explicit column list matching exactly what
+  `PaperDetailResponse` on the frontend actually uses. Highest-
+  confidence fix from this loop - a large, unnecessary payload on the
+  single most common data-fetching request in the app, removed with a
+  one-line-shaped, low-risk column-list change.
+- **`[BUG]` → fixed: `GET /api/papers/mine/uploaded` and `GET /api/
+  papers/bookmarks/mine` had no `.range()`/`.limit()` at all** - a
+  prolific lecturer's upload history or a heavy bookmarker has no
+  natural ceiling on how large these responses could grow. Capped both
+  at 200 rows (still ordered most-recent-first) rather than building
+  full pagination UI for what's currently a low-blast-radius,
+  single-user-scoped, slow-growing-over-years risk - a proportionate
+  fix, not a rebuild.
+- **`[BUG]` → fixed: `GET /api/questions` (the question-bank list view)
+  used `select('*')`**, over-fetching `expected_answer`/`explanation`/
+  `numerical_tolerance` for every row on every page load even though
+  the list UI never displays them. Scoped to the columns the list
+  actually renders; left `GET /api/questions/:id` (the single-question
+  detail view, where staff genuinely may need those fields) unchanged.
+- **`[MISSING]` → implemented: `courses`/`academic-years`/`semesters`
+  reference data (admin-managed, changes rarely) shared the same 30-
+  second global React Query `staleTime` as everything else**, despite
+  being fetched under identical query keys from four different pages
+  (`PapersBrowse`, `PracticeStart`, `QuestionBank`, `UploadPaper`) - a
+  student browsing papers then starting practice more than 30s later
+  triggered a redundant refetch of data that almost never changes.
+  Extracted three shared hooks (`useCourses`/`useAcademicYears`/
+  `useSemesters` in `hooks/useReferenceData.ts`) with a 10-minute
+  `staleTime`, and replaced all four call sites - a fix-once, not
+  fix-four-times-inconsistently, change.
+- **`[MISSING]` → implemented: the Python document-processing service
+  had no concurrency bound on job processing at all** - a single
+  uvicorn worker process, `FastAPI.BackgroundTasks` (which has no
+  concurrency cap of its own), and each job's extraction can hold a
+  full file (up to 25MB) plus up to 60 decoded page pixmaps in memory
+  at once. A burst of simultaneous uploads could spawn unboundedly many
+  concurrent extractions and risk exhausting memory. Added
+  `max_concurrent_processing_jobs` (default 3) and a module-level
+  `asyncio.Semaphore` in `routers/jobs.py`, acquired around the whole
+  download+extract body (not just extraction, since a queued download
+  also holds `file_bytes` in memory) - jobs beyond the limit wait their
+  turn rather than being rejected, so nothing is dropped, and the
+  `PROCESSING` callback now fires only once a job actually starts real
+  work, which is more honest than the previous "PROCESSING the instant
+  it was merely scheduled" behavior. New regression test
+  (`test_process_job_bounds_concurrent_extraction`) proves the bound
+  holds under a real burst of concurrent jobs, using a `threading.Lock`
+  -guarded counter (not an asyncio primitive, since `extract_document`
+  genuinely runs in a separate OS thread via `asyncio.to_thread`).
+- **`[HARDENING]`: removed two confirmed-unused dependencies**
+  (`pdfjs-dist`, `@radix-ui/react-toast` from `apps/web/package.json`)
+  - both had zero imports anywhere in `src` (repo-wide grep confirmed).
+  Neither affected the actual runtime bundle (Vite already tree-shook
+  them out - the last `vite build` before and after this change
+  produced byte-identical chunk sizes), but both inflated `node_modules`
+  install size and `npm ci`/CI time for nothing. `package-lock.json`
+  shrank by 321 lines.
+- **Investigated and deliberately left as-is** (documented, not
+  fixed, to avoid trading correctness for speed):
+  - Native PDF text extraction (`pdf_processing.py`'s
+    `native_text_per_page`) has no page-count cap, unlike OCR's
+    `MAX_OCR_PAGES = 60`. Considered adding one, then didn't: OCR is
+    already a best-effort fallback for scanned content, so capping it
+    is a reasonable pages, but a page cap on *native* extraction risks
+    silently dropping real content from a legitimately long past paper
+    (marking schemes, appendices, multi-part exams) - and the existing
+    `processing_timeout_seconds` (120s) already bounds the worst case
+    (an extreme document fails cleanly and reports back as recoverable,
+    rather than hanging the process). Truncating real document text to
+    save time would be trading correctness for performance, which the
+    brief explicitly rules out.
+  - `admin_dashboard_stats()` (Loop 10) runs two `SUM()` aggregates
+    that do a full scan of `examination_papers` on every admin-
+    dashboard load - correctly indexed on every filter column it uses,
+    but a `SUM` over "almost the whole table" gets little benefit from
+    an index regardless. Cheap today (small table), but will degrade
+    linearly as the catalogue grows. Not materialized/counter-cached in
+    this pass since there's no *measured* problem yet - only a
+    reasoned prediction - and Loop 08's own precedent in this codebase
+    is to fix RLS/index issues only once a realistic-volume measurement
+    actually shows a regression, not speculatively. Recorded in
+    ROADMAP.md as a scaling item to revisit with real data once the
+    catalogue is large enough to measure.
+  - `@fastify/rate-limit` uses its default in-memory store - fine for
+    the current single-instance Render deployment, but won't stay
+    consistent if this API is ever horizontally scaled to multiple
+    instances (each would enforce its own independent counter). Not a
+    bug today; recorded for Loop 15's deployment-readiness pass.
+- Confirmed, not fixed (already correct - explicitly not "optimized"
+  since there was nothing to optimize): no N+1 query pattern anywhere
+  in `apps/api/src/routes`/`services` (every list-then-detail path
+  already uses PostgREST embedded-relation selects or a single
+  `Promise.all`); every FK column an index-coverage check was run
+  against already had one (one implicitly via a `unique` constraint);
+  `examination_papers.search_vector` is trigger-maintained at write
+  time and GIN-indexed, with the Loop 08 RLS-vs-planner regression
+  already fixed; `apps/api/src/lib/supabase.ts`'s clients are correctly
+  singleton (admin/anon) or per-request-factory (`supabaseForUser`,
+  called once per request in `authenticate()` middleware) as
+  appropriate; Analytics.tsx is (and remains) the only frontend route
+  that needs lazy-loading - no other page pulls in a comparably large
+  dependency; no missing-dependency `useEffect`s or unmemoized-heavy-
+  computation renders were found anywhere in `apps/web/src`.
+- Full validation gate clean: 136 Node+web unit tests (unchanged count
+  - this loop added no new Node/web tests, only backend query/caching
+  changes covered by existing tests plus manual verification), 27/27
+  RLS/RBAC scenarios (unchanged - no schema/migration changes this
+  loop), 47/47 Playwright e2e (unchanged), 17/17 Python tests (up from
+  16 - the new concurrency-bound regression test) + `ruff check` +
+  `mypy` clean, production build byte-size-unchanged (confirming the
+  dependency removals were genuinely dead weight, not silently already
+  bundled).
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus

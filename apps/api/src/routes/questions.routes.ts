@@ -19,9 +19,17 @@ const VERIFY_ROLES = requireRole('LIBRARY_STAFF', 'ADMIN', 'SUPER_ADMIN');
 export async function questionsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/', { preHandler: authenticate, schema: { tags: ['questions'] } }, async (request) => {
     const query = questionSearchQuerySchema.parse(request.query);
+    // Explicit column list for the list view - select('*') here pulled
+    // expected_answer/explanation/numerical_tolerance for every row on
+    // every page load even though the question-bank list UI never
+    // displays them (only the single-question GET /:id view might
+    // need them, which keeps select('*')) (Loop 14 perf audit).
     let dbQuery = request.db
       .from('questions')
-      .select('*, question_options(id, option_label, option_text, order_index, is_correct)', { count: 'exact' });
+      .select(
+        'id, course_id, source_paper_id, section, question_number, question_text, question_type, marks, difficulty, verification_status, author_id, created_at, question_options(id, option_label, option_text, order_index, is_correct)',
+        { count: 'exact' },
+      );
     if (query.courseId) dbQuery = dbQuery.eq('course_id', query.courseId);
     if (query.questionType) dbQuery = dbQuery.eq('question_type', query.questionType);
     if (query.difficulty) dbQuery = dbQuery.eq('difficulty', query.difficulty);

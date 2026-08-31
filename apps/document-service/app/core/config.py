@@ -29,5 +29,16 @@ class Settings(BaseSettings):
     # worker indefinitely.
     processing_timeout_seconds: int = 120
 
+    # This service runs as a single uvicorn process (see Dockerfile),
+    # and each job's extraction can hold a full file (up to
+    # max_upload_mb) plus up to MAX_OCR_PAGES decoded page pixmaps in
+    # memory at once. FastAPI's BackgroundTasks has no concurrency cap
+    # of its own - a burst of simultaneous uploads would otherwise spawn
+    # unboundedly many concurrent extractions and risk exhausting memory
+    # (Loop 14 perf audit). This bounds how many jobs actually run
+    # extraction at once; jobs beyond the limit wait their turn rather
+    # than being rejected, so nothing is dropped, just queued.
+    max_concurrent_processing_jobs: int = 3
+
 
 settings = Settings()

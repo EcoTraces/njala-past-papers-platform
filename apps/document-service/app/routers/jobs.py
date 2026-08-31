@@ -13,6 +13,13 @@ from app.services.pdf_processing import UnprocessablePdfError, extract_document
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 logger = get_logger(__name__)
 
+# Bounds how many jobs actually run extraction at once (see the setting's
+# own docstring in core/config.py) - acquired around the whole download+
+# extract body below, not just extraction, since a queued download also
+# holds file_bytes in memory. Module-level and created once at import
+# time: every job submitted to this process shares the same semaphore.
+_processing_semaphore = asyncio.Semaphore(settings.max_concurrent_processing_jobs)
+
 
 @router.post(
     "",
@@ -31,8 +38,18 @@ async def create_job(job: JobRequest, background_tasks: BackgroundTasks) -> JobA
 
 async def _process_job(job: JobRequest) -> None:
     logger.info("job.started", job_id=job.job_id, paper_id=job.paper_id)
-    await send_callback(ProcessingCallback(job_id=job.job_id, paper_id=job.paper_id, status="PROCESSING"))
 
+    # A job waiting here for a free slot is genuinely still queued, not
+    # processing yet, so the PROCESSING callback (which flips the
+    # paper's ocr_status - see Node's internal.routes.ts) is sent only
+    # once real work actually begins, not merely once this background
+    # task was scheduled.
+    async with _processing_semaphore:
+        await send_callback(ProcessingCallback(job_id=job.job_id, paper_id=job.paper_id, status="PROCESSING"))
+        await _run_job(job)
+
+
+async def _run_job(job: JobRequest) -> None:
     try:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:

@@ -6,6 +6,7 @@ import { api } from '../../lib/apiClient';
 import { EmptyState } from '../../components/EmptyState';
 import { SkeletonCardGrid } from '../../components/Skeleton';
 import { StatusBadge } from '../../components/StatusBadge';
+import { useCourses, useAcademicYears, useSemesters } from '../../hooks/useReferenceData';
 import type { PaperStatus } from '@njala/shared';
 import { EXAMINATION_TYPES } from '@njala/shared';
 
@@ -26,22 +27,6 @@ interface PapersResponse {
   page: number;
   pageSize: number;
   totalPages: number;
-}
-
-interface Course {
-  id: string;
-  code: string;
-  title: string;
-}
-
-interface AcademicYear {
-  id: string;
-  name: string;
-}
-
-interface Semester {
-  id: string;
-  name: string;
 }
 
 const SORT_OPTIONS = [
@@ -65,9 +50,9 @@ export function PapersBrowse(): JSX.Element {
     queryFn: () => api.get<PapersResponse>(`/papers?${params.toString()}`),
   });
 
-  const { data: courses } = useQuery({ queryKey: ['courses'], queryFn: () => api.get<{ items: Course[] }>('/courses') });
-  const { data: academicYears } = useQuery({ queryKey: ['academic-years'], queryFn: () => api.get<{ items: AcademicYear[] }>('/academic-years') });
-  const { data: semesters } = useQuery({ queryKey: ['semesters'], queryFn: () => api.get<{ items: Semester[] }>('/semesters') });
+  const { data: courses } = useCourses();
+  const { data: academicYears } = useAcademicYears();
+  const { data: semesters } = useSemesters();
 
   const onSearch = (e: React.FormEvent) => {
     e.preventDefault();

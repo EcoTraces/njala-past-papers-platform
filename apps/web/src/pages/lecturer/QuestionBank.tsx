@@ -7,8 +7,8 @@ import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useAuth } from '../../hooks/useAuth';
+import { useCourses } from '../../hooks/useReferenceData';
 
-interface Course { id: string; code: string; title: string; }
 interface QuestionItem {
   id: string;
   question_text: string;
@@ -32,7 +32,7 @@ export function QuestionBank(): JSX.Element {
   const [pendingReject, setPendingReject] = useState<QuestionItem | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
-  const coursesQuery = useQuery({ queryKey: ['courses'], queryFn: () => api.get<{ items: Course[] }>('/courses') });
+  const coursesQuery = useCourses();
   const questionsQuery = useQuery({
     queryKey: ['questions', courseId],
     queryFn: () => api.get<{ items: QuestionItem[] }>(`/questions${courseId ? `?courseId=${courseId}` : ''}`),
