@@ -770,3 +770,68 @@ not fixed" below.
   e2e, 17/17 Python tests + `ruff check` clean (all unchanged - this
   loop touched CI config, docs, and env-file text, no application
   code).
+
+## [Unreleased] - Analytics time-series trends/export and a PDF.js canvas viewer (Loop 16)
+
+### Added
+
+- `analytics_daily_trends(p_days)` (`supabase/migrations/20260101000021_analytics_trends.sql`):
+  a day-bucketed `GROUP BY` across `examination_papers`/`paper_views`/
+  `paper_downloads`/`practice_sessions` for the last 1-365 days
+  (clamped both server-side and at the API), exposed via
+  `GET /api/analytics/trends?days=N` (ADMIN/SUPER_ADMIN/LIBRARY_STAFF).
+  Same "PostgREST can't express this" pattern as `ts_rank()` (Loop 08)
+  and `admin_dashboard_stats()`'s `SUM()`s (Loop 10) - a real Postgres
+  function, `SECURITY INVOKER` (RLS already grants staff full
+  visibility on every table it aggregates via `auth_is_staff()`, so no
+  new RLS policies were needed).
+- A time-series line chart (Recharts) on the admin Analytics page
+  showing uploads/views/downloads/practice attempts per day, with a
+  7/30/90-day range toggle, plus CSV export buttons (client-side Blob
+  download, `apps/web/src/lib/csv.ts`) for the trends data and both
+  existing top-10 lists (most-viewed, most-downloaded papers).
+- A real canvas-based PDF viewer (`apps/web/src/components/PdfViewer.tsx`,
+  `pdfjs-dist`) replacing `PaperDetail.tsx`'s native `<iframe>` preview:
+  page-by-page canvas rendering, a page-thumbnail sidebar, zoom
+  controls, and in-document search (matches each page's extracted text
+  content and lists matching pages with a snippet, click-to-jump -
+  deliberately not a full text-layer highlight overlay, a real
+  simplification given the added complexity that would buy little).
+  Lazy-loaded via `React.lazy`/`Suspense` so the ~1.4MB pdfjs-dist +
+  worker payload is never in the main bundle - only fetched once a
+  user actually clicks "View" on a paper.
+
+### Investigated
+
+- `pdfjs-dist` was removed in Loop 14 as a confirmed-zero-usage
+  dependency. Re-added here (`^4.6.82`, matching the pinned version
+  from before its removal) now that the PDF viewer actually uses it -
+  a deliberate reversal of that decision, not an oversight.
+
+### Verified
+
+- A standalone real-browser smoke test (headless Chromium via
+  Playwright, outside the app's own auth-gated pages, against
+  `apps/api/test-fixtures/sample-exam-paper.pdf`) confirmed the exact
+  rendering pipeline `PdfViewer` uses - `getDocument()`, page canvas
+  `render()`, `getTextContent()`, and thumbnail `render()` at a
+  smaller scale - all work correctly in a real browser with zero
+  errors: the canvas received real non-blank pixel data, and extracted
+  text matched the fixture's real content ("CSC101 End of Semester
+  Examination 2024 Question 1: What is 2 + 2? Question 2: ...").
+  Authenticated in-app e2e for the full PaperDetail flow remains the
+  same documented sandbox limitation as every prior loop (no live
+  Supabase session available here).
+- 139 Node+web unit tests (was 136; +3 for `/analytics/trends`'s
+  days-passthrough, clamping, and RPC-error-surfaces-as-500 behavior),
+  28/28 RLS/RBAC scenarios (+1, `analytics_daily_trends()` reflects
+  real day-bucketed data and doesn't leak into an adjacent day),
+  47/47 Playwright e2e, 17/17 Python tests + `ruff check`/`mypy` clean
+  (unchanged - no Python touched this loop) all pass on a from-scratch
+  rebuild. Full monorepo `build`/`typecheck`/`lint` clean.
+- The production web build's main bundle grew when `pdfjs-dist` first
+  landed statically imported (680KB gzip 191KB -> 1052KB gzip 300KB);
+  code-splitting `PdfViewer` via `React.lazy` brought the main bundle
+  back to its original size, with `pdfjs-dist` isolated in its own
+  372KB chunk plus a separately-fetched 1.4MB worker script, neither
+  loaded until the viewer actually opens.

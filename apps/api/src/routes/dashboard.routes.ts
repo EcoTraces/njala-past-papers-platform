@@ -174,4 +174,22 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       uploadsLast30Days: uploadsLast30Days.count ?? 0,
     };
   });
+
+  app.get(
+    '/analytics/trends',
+    { preHandler: [authenticate, requireRole('ADMIN', 'SUPER_ADMIN', 'LIBRARY_STAFF')], schema: { tags: ['dashboards'] } },
+    async (request) => {
+      // Day-bucketed GROUP BY across four tables in one call isn't
+      // expressible through PostgREST's plain query builder any more
+      // than ts_rank()/admin_dashboard_stats()'s SUM()s were - same
+      // fix, a real Postgres function (SECURITY INVOKER - RLS already
+      // grants staff full visibility on every table it aggregates, no
+      // new policies needed; see the migration).
+      const { days } = request.query as { days?: string };
+      const requestedDays = Math.min(365, Math.max(1, Number(days) || 30));
+      const { data, error } = await request.db.rpc('analytics_daily_trends', { p_days: requestedDays });
+      if (error) throw error;
+      return { items: data ?? [], days: requestedDays };
+    },
+  );
 }

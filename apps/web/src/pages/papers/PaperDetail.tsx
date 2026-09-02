@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { Bookmark, BookmarkCheck, Download, FileWarning, Loader2 } from 'lucide-react';
@@ -8,6 +8,11 @@ import { PageSpinner } from '../../components/Spinner';
 import { StatusBadge } from '../../components/StatusBadge';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import type { PaperStatus } from '@njala/shared';
+
+// pdfjs-dist is a large library (>1MB with its worker) that most page
+// loads never need - lazy-loading it keeps it out of the main bundle
+// entirely until a user actually clicks "View" on a paper.
+const PdfViewer = lazy(() => import('../../components/PdfViewer').then((m) => ({ default: m.PdfViewer })));
 
 interface PaperDetailResponse {
   id: string;
@@ -156,8 +161,10 @@ export function PaperDetail(): JSX.Element {
       )}
 
       {viewerUrl && (
-        <div className="overflow-hidden rounded-lg border border-slate-200">
-          <iframe title={`Preview of ${paper.title}`} src={viewerUrl} className="h-[70vh] w-full" />
+        <div className="h-[70vh]">
+          <Suspense fallback={<div className="skeleton h-full w-full" />}>
+            <PdfViewer url={viewerUrl} title={paper.title} />
+          </Suspense>
         </div>
       )}
 

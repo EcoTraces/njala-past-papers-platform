@@ -96,8 +96,7 @@ Live production deployment (requires real Supabase/Render/Vercel
 accounts and secrets only the operator can provide), outbound
 transactional email delivery (a pluggable interface exists;
 `ConsoleEmailProvider` is the default and must be swapped for a real
-provider in production), a dedicated PDF.js canvas viewer (the current
-viewer uses the browser's native PDF rendering via a signed URL in an
-iframe, which is a real, working viewer but doesn't do in-app page
-thumbnails/search-within-PDF), and broader analytics/reporting beyond
-the dashboards and `/api/analytics` implemented today.
+provider in production), and analytics/reporting beyond the
+time-series trends, CSV export, and platform-wide dashboards/
+`/api/analytics` implemented today (e.g. scheduled/emailed reports,
+per-faculty/department breakdowns).

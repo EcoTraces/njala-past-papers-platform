@@ -1167,6 +1167,82 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Scenario 28 (analytics time-series trends, recommended-improvement
+-- #11): analytics_daily_trends() reflects real, day-bucketed aggregate
+-- data rather than fake/hardcoded numbers - inserting a view/download/
+-- upload dated today changes today's row and only today's row. Runs as
+-- postgres superuser, same rationale as scenario 26: the function's
+-- own aggregation logic is what's under test here (independent of
+-- per-caller RLS scoping, which needs no new test - the function is
+-- SECURITY INVOKER over tables already covered by the existing
+-- policies/scenarios, and grants execute to `authenticated` the same
+-- way search_examination_papers()/admin_dashboard_stats() do).
+-- ---------------------------------------------------------------------
+do $$
+declare
+  v_before_uploads bigint;
+  v_before_views bigint;
+  v_before_downloads bigint;
+  v_today date := current_date;
+begin
+  select uploads, views into v_before_uploads, v_before_views
+    from analytics_daily_trends(1) where day = v_today;
+  select downloads into v_before_downloads from analytics_daily_trends(1) where day = v_today;
+
+  insert into auth.users (id) values ('90000000-0000-0000-0000-000000000001');
+  insert into profiles (id, student_id, full_name, status) values
+    ('90000000-0000-0000-0000-000000000001', 'TRENDTEST01', 'Trend Test Student', 'ACTIVE');
+  insert into examination_papers (
+    id, title, course_id, faculty_id, department_id, academic_year_id, semester_id,
+    examination_type, status, uploaded_by, storage_path, original_filename,
+    file_size_bytes, mime_type, checksum_sha256
+  ) values (
+    '90000000-0000-0000-0000-00000000000a', 'Trend Test Paper', '44444444-4444-4444-4444-444444444401',
+    '11111111-1111-1111-1111-111111111101', '22222222-2222-2222-2222-222222222201',
+    '55555555-5555-5555-5555-555555555502', '66666666-6666-6666-6666-666666666601',
+    'END_OF_SEMESTER', 'PUBLISHED', '90000000-0000-0000-0000-000000000001',
+    'CSC101/test/trend.pdf', 'trend.pdf', 1000, 'application/pdf', repeat('e', 64)
+  );
+  insert into paper_views (paper_id, user_id, viewed_at) values
+    ('90000000-0000-0000-0000-00000000000a', '90000000-0000-0000-0000-000000000001', now()),
+    ('90000000-0000-0000-0000-00000000000a', '90000000-0000-0000-0000-000000000001', now());
+  insert into paper_downloads (paper_id, user_id, downloaded_at) values
+    ('90000000-0000-0000-0000-00000000000a', '90000000-0000-0000-0000-000000000001', now());
+
+  declare
+    v_after_uploads bigint;
+    v_after_views bigint;
+    v_after_downloads bigint;
+    v_yesterday_uploads bigint;
+  begin
+    select uploads, views, downloads into v_after_uploads, v_after_views, v_after_downloads
+      from analytics_daily_trends(1) where day = v_today;
+
+    if v_after_uploads is distinct from v_before_uploads + 1 then
+      raise exception 'FAIL: analytics_daily_trends() uploads for today should have incremented by exactly 1, was % now %', v_before_uploads, v_after_uploads;
+    end if;
+    if v_after_views is distinct from v_before_views + 2 then
+      raise exception 'FAIL: analytics_daily_trends() views for today should have incremented by exactly 2, was % now %', v_before_views, v_after_views;
+    end if;
+    if v_after_downloads is distinct from v_before_downloads + 1 then
+      raise exception 'FAIL: analytics_daily_trends() downloads for today should have incremented by exactly 1, was % now %', v_before_downloads, v_after_downloads;
+    end if;
+
+    -- The new rows must only ever land on today's bucket, never bleed
+    -- into an adjacent day - a real regression class for date-bucketed
+    -- aggregation (e.g. a timezone-naive cast, or a `>=` filter with an
+    -- off-by-one boundary).
+    select uploads into v_yesterday_uploads from analytics_daily_trends(2) where day = v_today - 1;
+    if v_yesterday_uploads <> 0 then
+      raise exception 'FAIL: the paper inserted today leaked into yesterday''s bucket (got % uploads)', v_yesterday_uploads;
+    end if;
+
+    raise notice 'PASS: analytics_daily_trends() reflects real day-bucketed aggregate data (uploads=%, views=%, downloads=%), not fake numbers, and does not leak into an adjacent day', v_after_uploads, v_after_views, v_after_downloads;
+  end;
+end;
+$$;
+
 rollback;
 
 \echo 'All RLS/RBAC assertions passed.'

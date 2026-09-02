@@ -1136,6 +1136,58 @@ nothing there to fix.
   (`python3 -c "import yaml; yaml.safe_load(...)"`) even though the
   actual `docker build` itself could only be verified once pushed.
 
+## Findings from Loop 16 (analytics time-series trends/export, PDF.js canvas viewer)
+
+- **`[MISSING]` → implemented: analytics had no time-series data at
+  all** - `/api/analytics` and every dashboard only ever exposed
+  point-in-time counts and static top-10 lists, so there was nothing
+  for a trends chart or an exported report to show change over time.
+  Added `analytics_daily_trends(p_days)`, a real Postgres function
+  doing a day-bucketed `GROUP BY` across four tables at once (the same
+  "PostgREST can't express this" pattern as `ts_rank()` in Loop 08 and
+  `admin_dashboard_stats()`'s `SUM()`s in Loop 10), exposed via
+  `GET /api/analytics/trends?days=N` and rendered as a Recharts line
+  chart on the admin Analytics page with a 7/30/90-day toggle. Added
+  client-side CSV export (no new dependency - a Blob + `<a download>`
+  utility) for the trends data and both existing top-10 lists.
+- **`[MISSING]` → implemented: the PDF preview was a native
+  `<iframe>`**, not a custom viewer - fine for basic viewing, but no
+  page thumbnails and no in-document search, both explicitly requested.
+  Built `PdfViewer.tsx` on `pdfjs-dist` (re-added after Loop 14 removed
+  it as unused - a deliberate reversal now that it has a real caller):
+  canvas-based page rendering, a thumbnail sidebar, zoom controls, and
+  search that matches each page's extracted text and lists matching
+  pages with a snippet (click-to-jump) rather than a full text-layer
+  highlight overlay - a real, considered simplification given the
+  added complexity a glyph-accurate highlight layer would need for a
+  benefit few users would notice, not a cut corner in what it actually
+  does. Code-split via `React.lazy`/`Suspense` so the ~1.4MB
+  pdfjs-dist-plus-worker payload never loads until a user actually
+  clicks "View" - confirmed by comparing production build output
+  before/after (see CHANGELOG).
+- **Known, documented limitation**: canvas rendering has no text for a
+  screen reader to read, the same limitation the iframe it replaces
+  had for a non-HTML-rendered PDF. The "Download" button next to it in
+  `PaperDetail.tsx` remains the accessible path to the actual document
+  content; thumbnail/nav/zoom/search controls are all real
+  `<button>`/`<input>` elements with `aria-label`s, verified via
+  `eslint-plugin-jsx-a11y` (clean) same as every other pass this
+  session.
+- **Verified, not just trusted**: a standalone real-browser smoke test
+  (headless Chromium, outside the app's own auth-gated pages, against
+  the repo's real `sample-exam-paper.pdf` fixture) exercised the exact
+  same `getDocument()`/canvas `render()`/`getTextContent()`/thumbnail-
+  `render()` calls `PdfViewer` makes, confirming real non-blank pixel
+  output and correct text extraction end to end - not merely "it
+  compiled." Authenticated in-app e2e for the full PaperDetail flow
+  remains the same documented sandbox limitation as every prior loop
+  (no live Supabase session available here).
+- Full validation gate clean on a from-scratch rebuild: 139 Node+web
+  unit tests (+3 for `/analytics/trends`), 28/28 RLS/RBAC scenarios
+  (+1 for `analytics_daily_trends()`), 47/47 Playwright e2e, 17/17
+  Python tests + `ruff check`/`mypy` clean (unchanged - no Python
+  touched), full monorepo `build`/`typecheck`/`lint` clean.
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus
@@ -1149,7 +1201,7 @@ from a clean checkout.
 |---|---|---|
 | Public pages (landing, login, signup, about, help, contact, 404, 403) | `[COMPLETE]` | |
 | Account-pending page | `[COMPLETE]` | Added this pass |
-| Student: dashboard/browse/search/detail/PDF preview/download/bookmark/practice/results/attempts/notifications/profile | `[COMPLETE]` | PDF preview is an iframe against a signed URL (native browser rendering), not a custom PDF.js canvas viewer - see ROADMAP.md. Browse/search gained real course/examination-type/academic-year/semester filters and a working relevance sort this pass (Loop 08) - previously only a keyword box and recent/popular/title sort buttons existed |
+| Student: dashboard/browse/search/detail/PDF preview/download/bookmark/practice/results/attempts/notifications/profile | `[COMPLETE]` | PDF preview is now a custom `pdfjs-dist` canvas viewer with page thumbnails, zoom, and in-document search (Loop 16, replacing the previous `<iframe>`), lazy-loaded so it never bloats the main bundle. Browse/search gained real course/examination-type/academic-year/semester filters and a working relevance sort this pass (Loop 08) - previously only a keyword box and recent/popular/title sort buttons existed |
 | Lecturer: dashboard/my papers/upload/question bank | `[COMPLETE]` | |
 | Library: dashboard/review queue/upload | `[COMPLETE]` | |
 | Admin: dashboard/users/academic structure/audit logs | `[COMPLETE]` | Admin dashboard now renders `activeUsers`/`totalViews`/`totalDownloads`/`totalPracticeAttempts`/`recentActivity` (Loop 10), not just the original four counters |
@@ -1159,7 +1211,7 @@ from a clean checkout.
 | Charts (Recharts) | `[COMPLETE]` | New `/app/analytics` page (ADMIN/SUPER_ADMIN/LIBRARY_STAFF) renders real bar charts from `/api/analytics`'s most-viewed/most-downloaded paper data, code-split via `React.lazy` so the heavy Recharts dependency doesn't bloat the main bundle. Upload count now a real `totalUploads`/`uploadsLast30Days` pair from an exact-count query, not a capped-sample length (Loop 10) |
 | Paper version replace-file UI | `[MISSING]` | API now supports it (`GET`/`POST /api/papers/:id/versions`, Loop 06) - no frontend screen yet |
 | Paper category tagging UI | `[MISSING]` | `paper_categories`/`paper_category_links` tables exist, no UI |
-| Bundle size | `[technical debt]` | Main chunk is ~630KB (Analytics/Recharts is now split out at ~375KB, loaded only when visited); the remaining main chunk still exceeds Vite's 500KB warning and would benefit from further route-splitting (e.g. the PDF viewer route, admin routes) |
+| Bundle size | `[technical debt]` | Main chunk is ~680KB gzip 191KB (Analytics/Recharts split out at ~390KB, `PdfViewer`/pdfjs-dist split out at ~372KB plus a separately-fetched 1.4MB worker, all loaded only when visited/opened - Loop 16); the remaining main chunk still exceeds Vite's 500KB warning and would benefit from further route-splitting (e.g. admin routes) |
 
 ## Backend — `apps/api`
 
@@ -1171,7 +1223,7 @@ from a clean checkout.
 | Paper workflow (upload/submit/review/approve/publish/reject/archive/delete/download/bookmark/version-replace) | `[COMPLETE]` | State machine enforced in code + RLS; unit-tested. Versioning added Loop 06: `GET`/`POST /:id/versions`, three-independent-check upload validation (MIME/extension/magic-bytes), orphaned-storage-object cleanup, duplicate-content 409s |
 | Question bank (create/read/update/verify/delete) | `[COMPLETE]` | Answer/`is_correct` stripped for non-staff at the route layer (defense in depth on top of RLS) |
 | Practice (sessions/answers/pause/resume/submit/manual marking) | `[COMPLETE]` | Deterministic, server-only auto-marking verified at the DB layer; Loop 09 found and fixed three real integrity bugs (score self-assignment, out-of-snapshot answers, manual marking never working) and implemented real `time_spent_seconds` tracking - see "Findings from Loop 09" |
-| Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Loop 10 added real performance/recommendations (student), practice statistics/pending-actions (lecturer), catalogue stats (library), and active-users/views/downloads/practice-attempts/recent-activity (admin), backed by a new `admin_dashboard_stats()` RPC - see "Findings from Loop 10". Analytics is still basic (counts, top lists) - no time-series/export |
+| Dashboards (student/lecturer/library/admin) + analytics | `[COMPLETE]` | Loop 10 added real performance/recommendations (student), practice statistics/pending-actions (lecturer), catalogue stats (library), and active-users/views/downloads/practice-attempts/recent-activity (admin), backed by a new `admin_dashboard_stats()` RPC - see "Findings from Loop 10". Loop 16 added `GET /api/analytics/trends` (day-bucketed time-series via `analytics_daily_trends()`) plus CSV export of the trends and top-10 lists - see "Findings from Loop 16" |
 | Notifications (list/mark-read/mark-all-read) | `[COMPLETE]` | Creation is system-only (no client insert), by design |
 | Admin (users/staff provisioning/status/roles/audit logs/system settings) | `[COMPLETE]` | |
 | Internal processing callback | `[COMPLETE]` | Shared-secret guarded, not a Fastify-auth route by design. Handles `QUEUED`→`PROCESSING`→`COMPLETED`/`FAILED` (Loop 07); automatically re-queues a bounded number of recoverable failures |

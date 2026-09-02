@@ -17,6 +17,7 @@ type Row = Record<string, unknown>;
 
 function makeFakeDb(tables: Record<string, Row[]>, rpcResult: { data: Row[] | null; error: { message: string } | null } = { data: [], error: null }) {
   const queriedTables: string[] = [];
+  const rpcCalls: Array<{ fn: string; params: unknown }> = [];
 
   function selectBuilder(table: string, opts?: { count?: string; head?: boolean }) {
     const filters: Array<(r: Row) => boolean> = [];
@@ -79,13 +80,15 @@ function makeFakeDb(tables: Record<string, Row[]>, rpcResult: { data: Row[] | nu
 
   return {
     queriedTables,
+    rpcCalls,
     from(table: string) {
       queriedTables.push(table);
       return {
         select: (_cols?: string, opts?: { count?: string; head?: boolean }) => selectBuilder(table, opts),
       };
     },
-    async rpc(_fn: string) {
+    async rpc(fn: string, params?: unknown) {
+      rpcCalls.push({ fn, params });
       return rpcResult;
     },
   };
@@ -239,6 +242,81 @@ describe('dashboard routes (Loop 10)', () => {
     const body = res.json();
     expect(body.totalUploads).toBe(12);
     expect(body.uploadsLast30Days).toBe(7);
+
+    await freshApp.close();
+  });
+
+  it('/analytics/trends passes a requested days value through to analytics_daily_trends() and returns its rows', async () => {
+    const trendRows = [
+      { day: '2026-08-01', uploads: 2, views: 5, downloads: 1, practice_attempts: 0 },
+      { day: '2026-08-02', uploads: 0, views: 3, downloads: 0, practice_attempts: 1 },
+    ];
+    const fakeDb = makeFakeDb({}, { data: trendRows, error: null });
+    vi.doMock('./middleware/authenticate.js', () => ({
+      authenticate: async (request: { user?: unknown; db?: unknown }) => {
+        request.user = { id: '30000000-0000-0000-0000-000000000001', roles: ['ADMIN'] };
+        request.db = fakeDb;
+      },
+    }));
+    vi.resetModules();
+    const { buildApp: buildFreshApp } = await import('./app.js');
+    const freshApp = await buildFreshApp();
+    await freshApp.ready();
+
+    const res = await freshApp.inject({ method: 'GET', url: '/api/analytics/trends?days=7', headers: { authorization: 'Bearer x' } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items).toEqual(trendRows);
+    expect(body.days).toBe(7);
+    expect(fakeDb.rpcCalls).toEqual([{ fn: 'analytics_daily_trends', params: { p_days: 7 } }]);
+
+    await freshApp.close();
+  });
+
+  it('/analytics/trends clamps an out-of-range days value to 365 and defaults a missing one to 30', async () => {
+    const fakeDb = makeFakeDb({}, { data: [], error: null });
+    vi.doMock('./middleware/authenticate.js', () => ({
+      authenticate: async (request: { user?: unknown; db?: unknown }) => {
+        request.user = { id: '30000000-0000-0000-0000-000000000001', roles: ['LIBRARY_STAFF'] };
+        request.db = fakeDb;
+      },
+    }));
+    vi.resetModules();
+    const { buildApp: buildFreshApp } = await import('./app.js');
+    const freshApp = await buildFreshApp();
+    await freshApp.ready();
+
+    const overRes = await freshApp.inject({ method: 'GET', url: '/api/analytics/trends?days=9000', headers: { authorization: 'Bearer x' } });
+    expect(overRes.statusCode).toBe(200);
+    expect(overRes.json().days).toBe(365);
+
+    const defaultRes = await freshApp.inject({ method: 'GET', url: '/api/analytics/trends', headers: { authorization: 'Bearer x' } });
+    expect(defaultRes.statusCode).toBe(200);
+    expect(defaultRes.json().days).toBe(30);
+
+    expect(fakeDb.rpcCalls).toEqual([
+      { fn: 'analytics_daily_trends', params: { p_days: 365 } },
+      { fn: 'analytics_daily_trends', params: { p_days: 30 } },
+    ]);
+
+    await freshApp.close();
+  });
+
+  it('/analytics/trends surfaces a real 500 when analytics_daily_trends() errors', async () => {
+    const fakeDb = makeFakeDb({}, { data: null, error: { message: 'aggregate query failed' } });
+    vi.doMock('./middleware/authenticate.js', () => ({
+      authenticate: async (request: { user?: unknown; db?: unknown }) => {
+        request.user = { id: '30000000-0000-0000-0000-000000000001', roles: ['ADMIN'] };
+        request.db = fakeDb;
+      },
+    }));
+    vi.resetModules();
+    const { buildApp: buildFreshApp } = await import('./app.js');
+    const freshApp = await buildFreshApp();
+    await freshApp.ready();
+
+    const res = await freshApp.inject({ method: 'GET', url: '/api/analytics/trends', headers: { authorization: 'Bearer x' } });
+    expect(res.statusCode).toBe(500);
 
     await freshApp.close();
   });

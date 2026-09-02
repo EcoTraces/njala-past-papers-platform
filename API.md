@@ -95,6 +95,7 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 | GET | `/library/dashboard` | LIBRARY_STAFF |
 | GET | `/admin/dashboard` | ADMIN/SUPER_ADMIN |
 | GET | `/analytics` | ADMIN/SUPER_ADMIN/LIBRARY_STAFF |
+| GET | `/analytics/trends?days=N` (day-bucketed uploads/views/downloads/practice-attempt counts for the last `days` days, 1-365, default 30, clamped both here and server-side, via `analytics_daily_trends()`) | ADMIN/SUPER_ADMIN/LIBRARY_STAFF |
 
 ## Notifications (`/api/notifications`)
 

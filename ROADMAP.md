@@ -175,10 +175,6 @@ recorded in this repository's commit history - not just written.
 - No SMS/push notifications - `notifications` are in-app only.
 
 **Breadth not built**
-- No dedicated PDF.js canvas viewer with page thumbnails/in-document
-  search - the current viewer uses the browser's native PDF rendering
-  via an iframe pointed at a signed URL, which works but is simpler
-  than a custom PDF.js integration.
 - No `paper_versions`/`paper_categories` UI. Versioning now has full
   API support (`GET`/`POST /api/papers/:id/versions`, Loop 06) - only
   the frontend screen for replacing a file is still missing.
@@ -195,12 +191,14 @@ recorded in this repository's commit history - not just written.
   (and to that table's own INSERT/UPDATE/DELETE policies), but wasn't
   done speculatively without a matching measurement justifying each
   change - a good candidate for the security-hardening pass.
-- Analytics is limited to what `/api/analytics` and the dashboards
-  expose (most-viewed/downloaded papers, basic counts, real total/
-  30-day upload counts via an exact-count query as of Loop 10). A
-  dedicated `/app/analytics` page now renders this as real Recharts bar
-  charts (code-split so the dependency doesn't bloat the main bundle) -
-  still no exportable reports or time-series trends.
+- Analytics (`/api/analytics`, the dashboards, and the dedicated
+  `/app/analytics` page) covers most-viewed/downloaded papers, basic
+  counts, real total/30-day upload counts (Loop 10), and - as of
+  Loop 16 - a day-bucketed time-series (`GET /api/analytics/trends`,
+  a Recharts line chart with a 7/30/90-day toggle) plus client-side CSV
+  export of the trends and both top-10 lists. Not yet built: scheduled/
+  emailed reports, or any breakdown beyond the platform-wide totals
+  (e.g. per-faculty/department trends).
 - No dedicated "Help"/support ticketing beyond the static Help/Contact
   pages.
 - Content moderation / duplicate-record management beyond the
@@ -279,8 +277,7 @@ recorded in this repository's commit history - not just written.
    cover authenticated flows end-to-end.
 4. Build the `paper_versions` replace-file UI (API is ready) and the
    `paper_categories` tagging feature (API and UI both still missing).
-5. Add exportable reports/time-series trends to the analytics page.
-6. Close the known residual risk from Loop 11 (see above): split
+5. Close the known residual risk from Loop 11 (see above): split
    `question_options` into a safe view/RPC so a student's own active
    practice session can never expose `is_correct` even via a raw API
    call, not just through the frontend.
