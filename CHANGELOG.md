@@ -835,3 +835,61 @@ not fixed" below.
   back to its original size, with `pdfjs-dist` isolated in its own
   372KB chunk plus a separately-fetched 1.4MB worker script, neither
   loaded until the viewer actually opens.
+
+## [Unreleased] - Security checklist verification: HTTPS enforcement and dependency updates (Loop 17)
+
+A user-requested pass verifying 10 named security properties (rate
+limiting, input sanitization, password hashing, no hardcoded secrets,
+CORS, SQL/NoSQL injection protection, session expiry, HTTPS
+everywhere, security headers, dependency updates) against the actual
+code, not against memory of Loop 11's audit. 8 of the 10 were already
+real and verified in place with no code change needed; 2 had genuine
+gaps, both fixed here.
+
+### Added
+
+- `apps/api/src/config/env.ts` now fails startup in
+  `NODE_ENV=production` if `API_PUBLIC_URL`/`WEB_APP_URL`/any
+  `CORS_ALLOWED_ORIGINS` entry isn't `https://` - previously nothing
+  checked this, so a stray `http://` value in a production env file
+  would have been silently accepted. Covered by 4 new tests in the new
+  `env.test.ts`.
+- `.github/dependabot.yml`: weekly, minor/patch-grouped update PRs for
+  npm (root - covers the whole workspace via one lockfile), pip
+  (`apps/document-service`), the three Dockerfiles' base images, and
+  the GitHub Actions used in `ci.yml`. Previously there was no
+  automated dependency-update mechanism at all - the only way a known
+  vulnerability in a dependency would surface was a manual `npm audit`/
+  `pip-audit` run.
+
+### Verified, not just trusted
+
+- Rate limiting (`@fastify/rate-limit`, global + tighter per-route
+  budgets on `/auth/*`), CORS (allow-listed via `CORS_ALLOWED_ORIGINS`,
+  never wildcarded), security headers (`@fastify/helmet` with a
+  restrictive CSP and default HSTS), and no hardcoded secrets (every
+  credential flows through the zod-validated `env.ts`, checked via a
+  repo-wide secret scan in Loop 15) were all already real and already
+  covered by existing tests/docs - re-confirmed by reading the actual
+  registration code, not re-implemented.
+- Password hashing: this app never hashes or stores a password itself
+  - `loginStudent()`/`loginStaff()`/`signupStudent()` pass credentials
+  straight through to `supabaseAdmin.auth.*`, and Supabase Auth (GoTrue)
+  is the one system that ever touches a raw password, hashing it with
+  bcrypt internally. Confirmed `profiles` has no password column.
+- SQL/NoSQL injection: every database call in `apps/api` goes through
+  either the Supabase query builder or a parameterized `.rpc(name,
+  params)` call - a repo-wide grep found zero instances of a raw SQL
+  string built via interpolation anywhere in application code.
+- Input sanitization: every Zod schema in `packages/shared/src/
+  validation` enforces type, format (`.email()`/`.uuid()`/`.date()`),
+  and length (`.max()`) at the API boundary; a repo-wide grep for
+  `dangerouslySetInnerHTML` in `apps/web` found zero uses, so user-
+  supplied text is never rendered as raw HTML (React's default JSX
+  escaping is the actual XSS boundary here).
+- Session expiry: Supabase Auth issues short-lived access tokens with
+  automatic refresh-token rotation (`supabase-js`'s
+  `autoRefreshToken: true`), plus this app's own independent
+  account-level lockout (`profiles.failed_login_attempts`/
+  `locked_until`, 5 failures locks 15 minutes) on top of Supabase's
+  session mechanism.

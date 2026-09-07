@@ -1188,6 +1188,57 @@ nothing there to fix.
   Python tests + `ruff check`/`mypy` clean (unchanged - no Python
   touched), full monorepo `build`/`typecheck`/`lint` clean.
 
+## Findings from Loop 17 (10-point security checklist verification)
+
+User-requested verification of 10 named security properties against
+the actual running code (not a re-read of Loop 11's writeup). Method:
+grep/read the real registration code and schemas for each item, then
+fix what didn't hold up rather than just report it.
+
+- **Confirmed already real, no change needed**: rate limiting
+  (`@fastify/rate-limit`, global + per-route on `/auth/*`), CORS
+  (`CORS_ALLOWED_ORIGINS` allow-list, never wildcarded), security
+  headers (`@fastify/helmet`, restrictive CSP, default HSTS), no
+  hardcoded secrets (every credential flows through zod-validated
+  `env.ts`), SQL/NoSQL injection protection (zero raw-SQL string
+  interpolation found repo-wide - every call is either the Supabase
+  query builder or a parameterized `.rpc(name, params)`), input
+  validation/sanitization (every `packages/shared` Zod schema enforces
+  type/format/length; zero `dangerouslySetInnerHTML` in `apps/web`, so
+  React's own JSX escaping is the real XSS boundary), password hashing
+  (this app never touches a raw password - `loginStudent()`/
+  `loginStaff()`/`signupStudent()` hand credentials straight to
+  `supabaseAdmin.auth.*`, and Supabase Auth/GoTrue is the only system
+  that ever hashes one, with bcrypt, internally - confirmed `profiles`
+  has no password column), and session expiry (Supabase Auth's
+  short-lived access tokens + `autoRefreshToken` rotation, plus this
+  app's own independent `failed_login_attempts`/`locked_until`
+  account-lockout on top).
+- **`[MISSING]` → implemented: nothing enforced "HTTPS everywhere"
+  as an actual check** - it was true only because Render/Vercel happen
+  to terminate TLS by default, with no code anywhere that would notice
+  a misconfigured `http://` value in a production env file. Added a
+  `superRefine()` to `apps/api/src/config/env.ts` that fails startup
+  in `NODE_ENV=production` if `API_PUBLIC_URL`/`WEB_APP_URL`/any
+  `CORS_ALLOWED_ORIGINS` entry isn't `https://`. 4 new tests in
+  `env.test.ts` (uses the same `vi.resetModules()` + dynamic-import
+  pattern as the dashboard route tests, since `env.ts` validates at
+  module-load time, not via an exported function).
+- **`[MISSING]` → implemented: no automated dependency-update
+  mechanism at all** - `npm audit`/`pip-audit` were manual, one-off
+  checks (e.g. Loop 16's session), not something that would surface a
+  newly-disclosed vulnerability on its own. Added
+  `.github/dependabot.yml`: weekly PRs, grouped by minor/patch (a
+  major bump always gets its own PR for review), covering npm (root -
+  one entry covers the whole workspace via the shared lockfile), pip
+  (`apps/document-service`), all three Dockerfiles' base images, and
+  the GitHub Actions used in `ci.yml`.
+- Full validation gate clean: 117 `apps/api` unit tests (was 113; +4
+  for the new HTTPS-enforcement checks), 139 total Node+web unit tests
+  unchanged elsewhere, full monorepo `build`/`typecheck`/`lint` clean.
+  DB/Playwright/Python suites untouched by this pass (no migration,
+  frontend, or Python change).
+
 ## Project structure — `[COMPLETE]`
 
 npm-workspaces monorepo (`packages/shared`, `apps/api`, `apps/web`) plus

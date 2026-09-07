@@ -252,6 +252,32 @@ policy for staff), independent of either of the above.
   Render-appended `X-Forwarded-For` entry is trusted, and the real
   client IP is derived from the actual TCP connection otherwise.
 
+## HTTPS enforcement
+
+- `apps/api/src/config/env.ts` fails startup in `NODE_ENV=production` if
+  `API_PUBLIC_URL`, `WEB_APP_URL`, or any `CORS_ALLOWED_ORIGINS` entry
+  isn't `https://` - a stray `http://` value (a copy-paste from local
+  dev, a misconfigured custom domain) is otherwise a silent way to
+  serve real traffic in the clear or let a plaintext origin make
+  authenticated cross-origin requests. Verified in `env.test.ts`.
+- `@fastify/helmet` enables HSTS by default (not overridden by this
+  app's config, which only customizes CSP and
+  `crossOriginResourcePolicy`).
+- Actual TLS termination is the hosting platform's job, not this
+  application's: Render and Vercel both terminate TLS and redirect
+  `http://` to `https://` by default for the domains this project
+  deploys to (`render.yaml`/`docs/deployment/README.md`).
+
+## Dependency updates
+
+`.github/dependabot.yml` opens weekly PRs (grouped by minor/patch to
+avoid one-PR-per-package noise) for: npm (root - covers
+`packages/shared`/`apps/api`/`apps/web` via one workspace-aware
+lockfile), pip (`apps/document-service`), the three Dockerfiles'
+base images, and the GitHub Actions used in `ci.yml` itself. A major
+version bump is never auto-grouped - it always opens its own PR so a
+breaking change gets reviewed on its own.
+
 ## Internal service-to-service trust
 
 `apps/document-service` is never reachable from a browser in the

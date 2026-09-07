@@ -27,6 +27,32 @@ const envSchema = z.object({
   DOCUMENT_SERVICE_CALLBACK_SECRET: z.string().min(8),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+}).superRefine((value, ctx) => {
+  // "HTTPS everywhere" is otherwise just an assumption about how this
+  // gets deployed (Render/Vercel both terminate TLS by default) with
+  // nothing actually checking it - a production env file with a stray
+  // http:// value (a copy-paste from local dev, a misconfigured custom
+  // domain) would silently serve real traffic in the clear, or CORS
+  // would allow a plaintext origin to make authenticated requests, and
+  // nothing here would notice. Fail startup instead.
+  if (value.NODE_ENV !== 'production') return;
+  const httpsFields: Array<[keyof typeof value, string]> = [
+    ['API_PUBLIC_URL', value.API_PUBLIC_URL],
+    ['WEB_APP_URL', value.WEB_APP_URL],
+  ];
+  for (const [field, url] of httpsFields) {
+    if (!url.startsWith('https://')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `${field} must use https:// in production, got: ${url}` });
+    }
+  }
+  const insecureOrigins = value.CORS_ALLOWED_ORIGINS.filter((origin) => !origin.startsWith('https://'));
+  if (insecureOrigins.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['CORS_ALLOWED_ORIGINS'],
+      message: `CORS_ALLOWED_ORIGINS must be https:// in production, got: ${insecureOrigins.join(', ')}`,
+    });
+  }
 });
 
 const parsed = envSchema.safeParse(process.env);
