@@ -4,7 +4,7 @@
 # (see docs/deployment/README.md); this image exists for local
 # docker-compose testing and for teams that prefer a container-based
 # static host instead.
-FROM node:20-slim AS build
+FROM node:25-slim AS build
 WORKDIR /srv
 
 ARG VITE_SUPABASE_URL
