@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { passwordSchema, studentIdSchema, studentLoginSchema } from './auth.js';
+import { passwordSchema, studentIdSchema, studentLoginSchema, studentSignupSchema } from './auth.js';
 
 describe('studentIdSchema', () => {
   it('normalizes to uppercase', () => {
@@ -49,5 +49,22 @@ describe('studentLoginSchema', () => {
   it('normalizes the student ID as part of the composite schema', () => {
     const result = studentLoginSchema.parse({ studentId: 'nj2021cs0142', password: 'anything' });
     expect(result.studentId).toBe('NJ2021CS0142');
+  });
+});
+
+describe('studentSignupSchema', () => {
+  it('asks the student to select a programme when none is selected', () => {
+    const result = studentSignupSchema.safeParse({
+      studentId: 'NJ2021CS0142',
+      fullName: 'Student Name',
+      password: 'Abcdefg1',
+      programmeId: '',
+      entryYear: 2025,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors.programmeId).toContain('Select a programme');
+    }
   });
 });

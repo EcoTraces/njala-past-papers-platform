@@ -13,7 +13,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
   app.get('/programmes', { schema: { tags: ['academic'], summary: 'Public: list programmes for the sign-up form' } }, async () => {
     const { data, error } = await supabaseAdmin
       .from('programmes')
-      .select('id, name, code, level, departments(name, faculties(name))')
+      .select('id, name, departments(name, faculties(name))')
       .is('deleted_at', null)
       .order('name');
     if (error) throw error;

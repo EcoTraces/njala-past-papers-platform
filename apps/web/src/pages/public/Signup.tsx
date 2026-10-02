@@ -11,7 +11,6 @@ import { Spinner } from '../../components/Spinner';
 interface ProgrammeOption {
   id: string;
   name: string;
-  code: string;
   departments: { name: string; faculties: { name: string } } | null;
 }
 
@@ -30,6 +29,7 @@ export function Signup(): JSX.Element {
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<StudentSignupInput>({ resolver: zodResolver(studentSignupSchema) });
+  const programmes = programmesQuery.data?.items ?? [];
 
   const onSubmit = handleSubmit(async (values) => {
     setServerError(null);
@@ -87,18 +87,30 @@ export function Signup(): JSX.Element {
             <label className="label" htmlFor="programmeId">Programme</label>
             {programmesQuery.isLoading ? (
               <Spinner label="Loading programmes" />
+            ) : programmesQuery.isError ? (
+              <div role="alert" className="mt-1 text-sm text-red-600">
+                Unable to load programmes.{' '}
+                <button type="button" className="font-medium underline" onClick={() => void programmesQuery.refetch()}>
+                  Try again
+                </button>
+              </div>
+            ) : programmes.length === 0 ? (
+              <p role="status" className="mt-1 text-sm text-slate-600">
+                No programmes are available right now. Please contact the administrator.
+              </p>
             ) : (
               <select
                 id="programmeId"
                 className="input"
+                required
                 aria-invalid={errors.programmeId ? true : undefined}
                 aria-describedby={errors.programmeId ? 'programmeId-error' : undefined}
                 {...register('programmeId')}
               >
                 <option value="">Select your programme</option>
-                {programmesQuery.data?.items.map((p) => (
+                {programmes.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.code} - {p.name} ({p.departments?.faculties.name})
+                    {p.name} ({p.departments?.faculties.name})
                   </option>
                 ))}
               </select>
@@ -146,7 +158,11 @@ export function Signup(): JSX.Element {
             {errors.password && <p id="password-error" role="alert" className="mt-1 text-sm text-red-600">{errors.password.message}</p>}
           </div>
 
-          <button type="submit" className="btn-primary w-full" disabled={isSubmitting}>
+          <button
+            type="submit"
+            className="btn-primary w-full"
+            disabled={isSubmitting || programmesQuery.isLoading || programmesQuery.isError || programmes.length === 0}
+          >
             {isSubmitting ? 'Creating account…' : 'Create account'}
           </button>
 

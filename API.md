@@ -27,7 +27,7 @@ obtained from `/api/auth/login` (student), `/api/auth/staff-login`
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/programmes` | - | Needed by the sign-up form, which runs before any session exists |
+| GET | `/programmes` | - | Lists the seeded programme catalogue for the sign-up form before a session exists |
 
 ## Academic structure (`/api`)
 

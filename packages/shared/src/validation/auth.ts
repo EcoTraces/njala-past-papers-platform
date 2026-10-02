@@ -35,7 +35,7 @@ export const studentSignupSchema = z.object({
   studentId: studentIdSchema,
   fullName: z.string().trim().min(2).max(120),
   password: passwordSchema,
-  programmeId: z.string().uuid(),
+  programmeId: z.string().min(1, 'Select a programme').uuid('Select a valid programme'),
   entryYear: z.number().int().min(2000).max(2100),
   contactEmail: z.string().email().optional(),
 });
