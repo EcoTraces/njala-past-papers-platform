@@ -1,7 +1,7 @@
  # ============================================================
 # Build stage
 # ============================================================
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 
 WORKDIR /srv
 
@@ -35,7 +35,7 @@ RUN npm run build --workspace packages/shared \
 # ============================================================
 # Production runtime stage
 # ============================================================
-FROM node:20-slim AS runtime
+FROM node:22-slim AS runtime
 
 WORKDIR /srv
 
