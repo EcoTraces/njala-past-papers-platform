@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { paperMetadataSchema, paperRejectSchema, paperReviewActionSchema, paperSearchQuerySchema } from '@njala/shared';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
-import { assertLecturerOwnsCourse, transitionPaperStatus } from '../services/papers.service.js';
+import { transitionPaperStatus } from '../services/papers.service.js';
 import { createSignedUrl, deletePaperFile, generateStorageKey, uploadPaperFile, validatePaperUpload } from '../services/storage.service.js';
 import { queueDocumentProcessing, reprocessPaper } from '../services/documentProcessing.service.js';
 import { recordAuditEvent } from '../services/audit.service.js';
@@ -190,11 +190,6 @@ export async function papersRoutes(app: FastifyInstance): Promise<void> {
         examinationDate: fields.examinationDate || undefined,
         durationMinutes: fields.durationMinutes ? Number(fields.durationMinutes) : undefined,
       });
-
-      const isLecturerOnly = request.user!.roles.every((r) => r === 'LECTURER');
-      if (isLecturerOnly) {
-        await assertLecturerOwnsCourse(request.user!.id, metadata.courseId);
-      }
 
       const { data: course, error: courseError } = await request.db
         .from('courses')

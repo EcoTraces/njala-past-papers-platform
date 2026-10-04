@@ -1,19 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { PAPER_STATUS_TRANSITIONS, type PaperStatus } from '@njala/shared';
-import { supabaseAdmin } from '../lib/supabase.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
-
-export async function assertLecturerOwnsCourse(lecturerId: string, courseId: string): Promise<void> {
-  const { data } = await supabaseAdmin
-    .from('course_lecturers')
-    .select('course_id')
-    .eq('course_id', courseId)
-    .eq('lecturer_id', lecturerId)
-    .maybeSingle();
-  if (!data) {
-    throw new ForbiddenError('You are not authorized to manage papers for this course');
-  }
-}
 
 export function assertValidTransition(from: PaperStatus, to: PaperStatus): void {
   const allowed = PAPER_STATUS_TRANSITIONS[from];
