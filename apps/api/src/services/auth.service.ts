@@ -1,4 +1,5 @@
 import type { AppRole, StudentSignupInput } from '@njala/shared';
+import type { FastifyRequest } from 'fastify';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { env } from '../config/env.js';
 import { emailProvider } from '../lib/email.js';
@@ -256,36 +257,115 @@ export async function loginStaff(email: string, password: string): Promise<AuthR
   };
 }
 
+function passwordResetRedirectUrl(): string {
+  return `${env.WEB_APP_URL.replace(/\/$/, '')}/reset-password`;
+}
+
+function accountCanResetPassword(profile: { status: string; locked_until: string | null; deleted_at: string | null }): boolean {
+  return profile.status === 'ACTIVE'
+    && !profile.deleted_at
+    && (!profile.locked_until || new Date(profile.locked_until) <= new Date());
+}
+
 /**
- * Staff accounts use their real email as the Supabase Auth identifier,
- * so Supabase's own recovery-link flow works unmodified: the frontend
- * calls supabase.auth.resetPasswordForEmail() directly and later
- * exchanges the recovery token for a session client-side. For students
- * (whose Auth identifier is synthetic), we generate the recovery link
- * server-side via the Admin API and deliver it to their optional
- * contact_email instead.
+ * Sends staff recovery through Supabase Auth and student recovery to the
+ * contact email on their profile. Student Auth identifiers are synthetic,
+ * so sending Supabase's built-in recovery email would never reach them.
  */
-export async function requestStudentPasswordReset(studentId: string): Promise<void> {
+export async function requestPasswordResetByEmail(email: string, request?: FastifyRequest): Promise<void> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const escapedEmail = normalizedEmail.replace(/[\\%_]/g, '\\$&');
+  const { data: profile, error: lookupError } = await supabaseAdmin
+    .from('profiles')
+    .select('id, student_id, status, locked_until, deleted_at')
+    .ilike('contact_email', escapedEmail)
+    .maybeSingle();
+
+  if (lookupError) throw lookupError;
+
+  await recordAuditEvent({
+    actorId: null,
+    action: 'auth.password_reset_requested',
+    entityType: 'profiles',
+    request,
+  });
+
+  if (!profile || !accountCanResetPassword(profile)) return;
+
+  if (profile.student_id) {
+    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'recovery',
+      email: studentAuthIdentifier(profile.student_id),
+      options: { redirectTo: passwordResetRedirectUrl() },
+    });
+    if (error) throw error;
+    const actionLink = data.properties?.action_link;
+    if (!actionLink) throw new Error('Supabase did not return a password recovery link');
+
+    await emailProvider.send({
+      to: normalizedEmail,
+      subject: 'Reset your Njala Past Papers password',
+      body: `Use this link to reset your password: ${actionLink}\nThis link expires shortly and can only be used once.`,
+    });
+    return;
+  }
+
+  const { error } = await supabaseAdmin.auth.resetPasswordForEmail(normalizedEmail, {
+    redirectTo: passwordResetRedirectUrl(),
+  });
+  if (error) throw error;
+}
+
+/**
+ * Legacy Student-ID reset requests are still supported for API clients
+ * that have not moved to the email-based reset form.
+ */
+export async function requestStudentPasswordReset(studentId: string, request?: FastifyRequest): Promise<void> {
   const { data: profile } = await supabaseAdmin
     .from('profiles')
-    .select('id, contact_email')
+    .select('id, contact_email, status, locked_until, deleted_at')
     .eq('student_id', studentId)
     .maybeSingle();
 
-  // Always behave the same way whether or not the account/email exists,
-  // to avoid leaking which Student IDs are registered.
-  if (!profile?.contact_email) return;
-
-  const { data: link } = await supabaseAdmin.auth.admin.generateLink({
-    type: 'recovery',
-    email: studentAuthIdentifier(studentId),
+  await recordAuditEvent({
+    actorId: null,
+    action: 'auth.password_reset_requested',
+    entityType: 'profiles',
+    request,
   });
 
-  if (link?.properties?.action_link) {
-    await emailProvider.send({
-      to: profile.contact_email,
-      subject: 'Reset your Njala Past Papers password',
-      body: `Use this link to reset your password: ${link.properties.action_link}\nThis link expires shortly and can only be used once.`,
-    });
+  // Always behave the same way whether or not the account/email exists,
+  // to avoid leaking which Student IDs are registered.
+  if (!profile?.contact_email || !accountCanResetPassword(profile)) return;
+
+  const { data: link, error } = await supabaseAdmin.auth.admin.generateLink({
+    type: 'recovery',
+    email: studentAuthIdentifier(studentId),
+    options: { redirectTo: passwordResetRedirectUrl() },
+  });
+  if (error) throw error;
+
+  const actionLink = link.properties?.action_link;
+  if (!actionLink) throw new Error('Supabase did not return a password recovery link');
+  await emailProvider.send({
+    to: profile.contact_email,
+    subject: 'Reset your Njala Past Papers password',
+    body: `Use this link to reset your password: ${actionLink}\nThis link expires shortly and can only be used once.`,
+  });
+}
+
+export async function assertPasswordChangeAllowed(userId: string): Promise<void> {
+  const { data: profile, error } = await supabaseAdmin
+    .from('profiles')
+    .select('status, locked_until, deleted_at')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!profile || profile.deleted_at || profile.status !== 'ACTIVE') {
+    throw new ForbiddenError('This account cannot change its password.');
+  }
+  if (profile.locked_until && new Date(profile.locked_until) > new Date()) {
+    throw new ForbiddenError('Password changes are unavailable while this account is temporarily locked.');
   }
 }

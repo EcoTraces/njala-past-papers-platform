@@ -7,6 +7,7 @@ import * as Tabs from '@radix-ui/react-tabs';
 import { studentLoginSchema, staffLoginSchema } from '@njala/shared';
 import { useAuth } from '../../hooks/useAuth';
 import { ApiError } from '../../lib/apiClient';
+import { PasswordInput } from '../../components/PasswordInput';
 
 // Reuses the same schemas the API validates against (packages/shared),
 // so login-time format feedback (and the studentId normalization -
@@ -88,9 +89,8 @@ export function Login(): JSX.Element {
                 </div>
                 <div>
                   <label className="label" htmlFor="student-password">Password</label>
-                  <input
+                  <PasswordInput
                     id="student-password"
-                    type="password"
                     className="input"
                     autoComplete="current-password"
                     aria-invalid={studentForm.formState.errors.password ? true : undefined}
@@ -101,6 +101,9 @@ export function Login(): JSX.Element {
                     <p id="student-password-error" role="alert" className="mt-1 text-sm text-red-600">{studentForm.formState.errors.password.message}</p>
                   )}
                 </div>
+                <p className="-mt-2 text-right text-sm">
+                  <Link to="/forgot-password" className="font-medium text-brand-700 hover:underline">Forgot password?</Link>
+                </p>
                 <button type="submit" className="btn-primary w-full" disabled={studentForm.formState.isSubmitting}>
                   {studentForm.formState.isSubmitting ? 'Signing in…' : 'Sign in'}
                 </button>
@@ -129,9 +132,8 @@ export function Login(): JSX.Element {
                 </div>
                 <div>
                   <label className="label" htmlFor="staff-password">Password</label>
-                  <input
+                  <PasswordInput
                     id="staff-password"
-                    type="password"
                     className="input"
                     autoComplete="current-password"
                     aria-invalid={staffForm.formState.errors.password ? true : undefined}
@@ -142,6 +144,9 @@ export function Login(): JSX.Element {
                     <p id="staff-password-error" role="alert" className="mt-1 text-sm text-red-600">{staffForm.formState.errors.password.message}</p>
                   )}
                 </div>
+                <p className="-mt-2 text-right text-sm">
+                  <Link to="/forgot-password" className="font-medium text-brand-700 hover:underline">Forgot password?</Link>
+                </p>
                 <button type="submit" className="btn-primary w-full" disabled={staffForm.formState.isSubmitting}>
                   {staffForm.formState.isSubmitting ? 'Signing in…' : 'Sign in'}
                 </button>

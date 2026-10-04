@@ -21,7 +21,8 @@ obtained from `/api/auth/login` (student), `/api/auth/staff-login`
 | POST | `/staff-login` | - | Email + password (LECTURER/LIBRARY_STAFF/ADMIN/SUPER_ADMIN) |
 | POST | `/logout` | ✓ | Invalidates the current session |
 | GET | `/me` | ✓ | Current user's profile + roles |
-| POST | `/password-reset/request` | - | Student ID (uses `contact_email` if set) or staff email |
+| POST | `/password-reset/request` | - | Email address; sends a generic response for unknown, pending, or locked accounts |
+| GET | `/password/change/eligibility` | ✓ | Rejects password changes for non-active or temporarily locked accounts |
 
 ## Public lookups (`/api/public`)
 
@@ -44,7 +45,7 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/` | ✓ | Search/filter/sort/paginate (`q, courseId, courseCode, facultyId, departmentId, programmeId, academicYearId, semesterId, examinationType, status, sort, page, pageSize`). `sort=relevance` ranks by `ts_rank` against `q` via the `search_examination_papers` RPC (SECURITY INVOKER - RLS still applies); every other sort uses the plain filtered/ordered query. `courseCode` resolves to a course id first (case-insensitive); an unmatched code returns zero results, never the unfiltered list |
+| GET | `/` | ✓ | Search/filter/sort/paginate (`q, courseId, courseCode, facultyId, departmentId, programmeId, academicYearId, semesterId, examinationType, status, sort, page, pageSize`). `sort=relevance` ranks paper text and matches course codes/titles and academic-year labels via `search_examination_papers` (SECURITY INVOKER - RLS still applies); every other sort uses the plain filtered/ordered query. `courseCode` resolves to a course id first (case-insensitive); an unmatched code returns zero results, never the unfiltered list |
 | GET | `/mine/uploaded` | ✓ (staff) | Papers the caller uploaded |
 | GET | `/bookmarks/mine` | ✓ | Caller's bookmarked papers |
 | GET | `/:id` | ✓ | Full paper detail; records a view |
@@ -88,8 +89,8 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 
 ## Dashboards & analytics (`/api`)
 
-| Method | Path | Auth |
-|---|---|---|
+| Method | Path | Auth | Notes |
+|---|---|---|---|
 | GET | `/student/dashboard` | STUDENT |
 | GET | `/lecturer/dashboard` | LECTURER |
 | GET | `/library/dashboard` | LIBRARY_STAFF |
@@ -101,7 +102,7 @@ Reads require any authenticated role; writes require ADMIN/SUPER_ADMIN.
 
 | Method | Path | Auth |
 |---|---|---|
-| GET | `/` | ✓ |
+| GET | `/` | ✓ | Latest 20 items plus the user's unread notification count |
 | PATCH | `/:id/read` | ✓ |
 | POST | `/read-all` | ✓ |
 

@@ -3,14 +3,22 @@ import { authenticate } from '../middleware/authenticate.js';
 
 export async function notificationsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/', { preHandler: authenticate, schema: { tags: ['dashboards'], summary: 'List the current user\'s notifications' } }, async (request) => {
-    const { data, error } = await request.db
-      .from('notifications')
-      .select('*')
-      .eq('user_id', request.user!.id)
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (error) throw error;
-    return { items: data };
+    const [notifications, unread] = await Promise.all([
+      request.db
+        .from('notifications')
+        .select('*')
+        .eq('user_id', request.user!.id)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      request.db
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', request.user!.id)
+        .eq('is_read', false),
+    ]);
+    if (notifications.error) throw notifications.error;
+    if (unread.error) throw unread.error;
+    return { items: notifications.data, unreadCount: unread.count ?? 0 };
   });
 
   app.patch('/:id/read', { preHandler: authenticate, schema: { tags: ['dashboards'] } }, async (request) => {

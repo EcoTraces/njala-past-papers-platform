@@ -7,6 +7,7 @@ import { studentSignupSchema, type StudentSignupInput } from '@njala/shared';
 import { useAuth } from '../../hooks/useAuth';
 import { api, ApiError } from '../../lib/apiClient';
 import { Spinner } from '../../components/Spinner';
+import { PasswordInput } from '../../components/PasswordInput';
 
 interface ProgrammeOption {
   id: string;
@@ -146,9 +147,8 @@ export function Signup(): JSX.Element {
 
           <div>
             <label className="label" htmlFor="password">Password</label>
-            <input
+            <PasswordInput
               id="password"
-              type="password"
               className="input"
               autoComplete="new-password"
               aria-invalid={errors.password ? true : undefined}

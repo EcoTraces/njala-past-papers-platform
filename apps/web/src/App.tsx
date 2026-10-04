@@ -7,6 +7,8 @@ import { PageSpinner } from './components/Spinner';
 import { Landing } from './pages/public/Landing';
 import { Login } from './pages/public/Login';
 import { Signup } from './pages/public/Signup';
+import { ForgotPassword } from './pages/public/ForgotPassword';
+import { ResetPassword } from './pages/public/ResetPassword';
 import { About } from './pages/public/About';
 import { Help } from './pages/public/Help';
 import { Contact } from './pages/public/Contact';
@@ -49,6 +51,8 @@ export function App(): JSX.Element {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/about" element={<About />} />
       <Route path="/help" element={<Help />} />
       <Route path="/contact" element={<Contact />} />

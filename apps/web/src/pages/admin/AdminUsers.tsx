@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { api, ApiError } from '../../lib/apiClient';
 import { SkeletonRows } from '../../components/Skeleton';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { useSearchParams } from 'react-router-dom';
 
 interface UserRow {
   id: string;
@@ -25,12 +26,17 @@ const STATUS_BADGE_STYLES: Record<string, string> = {
 
 export function AdminUsers(): JSX.Element {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const search = searchParams.get('q')?.trim() ?? '';
   const [error, setError] = useState<string | null>(null);
   const [createdCredential, setCreatedCredential] = useState<{ email: string; temporaryPassword: string } | null>(null);
   const [form, setForm] = useState({ fullName: '', email: '', staffId: '', role: 'LECTURER' as (typeof STAFF_ROLES)[number] });
   const [pendingSuspend, setPendingSuspend] = useState<UserRow | null>(null);
 
-  const usersQuery = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<{ items: UserRow[] }>('/admin/users') });
+  const usersQuery = useQuery({
+    queryKey: ['admin-users', search],
+    queryFn: () => api.get<{ items: UserRow[] }>(`/admin/users${search ? `?${new URLSearchParams({ q: search })}` : ''}`),
+  });
 
   const createStaff = useMutation({
     mutationFn: () => api.post<{ email: string; temporaryPassword: string }>('/admin/staff', form),
@@ -52,7 +58,10 @@ export function AdminUsers(): JSX.Element {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-slate-900">Users</h1>
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900">Users</h1>
+        {search && <p className="mt-1 text-sm text-slate-600">Search results for “{search}”</p>}
+      </div>
 
       <form
         className="card space-y-4"

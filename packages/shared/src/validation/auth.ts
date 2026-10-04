@@ -42,7 +42,7 @@ export const studentSignupSchema = z.object({
 
 export const passwordResetRequestSchema = z.object({
   studentId: studentIdSchema.optional(),
-  email: z.string().email().optional(),
+  email: z.string().trim().email().optional(),
 }).refine((data) => data.studentId || data.email, {
   message: 'Provide either a student ID or an email address',
 });

@@ -7,18 +7,17 @@ import {
   Bookmark,
   Bell,
   User,
-  Menu,
-  X,
   Upload,
   ClipboardList,
   Users,
   Building2,
   ShieldCheck,
   BarChart3,
-  LogOut,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../hooks/useAuth';
+import { NotificationsProvider } from '../hooks/useNotifications';
+import { AppHeader } from './AppHeader';
 
 interface NavItem {
   to: string;
@@ -56,13 +55,21 @@ function navForRoles(roles: string[]): NavItem[] {
 
 const MOBILE_NAV_ID = 'primary-mobile-nav';
 
+function isDesktopViewport(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(min-width: 1024px)').matches;
+}
+
 export function AppLayout(): JSX.Element {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopNavOpen, setDesktopNavOpen] = useState(isDesktopViewport);
   const items = navForRoles(user?.roles ?? []);
   const location = useLocation();
   const toggleButtonRef = useRef<HTMLButtonElement>(null);
   const navRef = useRef<HTMLElement>(null);
+  const navOpen = mobileOpen || desktopNavOpen;
 
   // A route change is the most common way the drawer gets left open
   // behind the user - back/forward navigation, a redirect from inside
@@ -71,6 +78,14 @@ export function AppLayout(): JSX.Element {
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    function closeMobileDrawerOnResize() {
+      if (isDesktopViewport()) setMobileOpen(false);
+    }
+    window.addEventListener('resize', closeMobileDrawerOnResize);
+    return () => window.removeEventListener('resize', closeMobileDrawerOnResize);
+  }, []);
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -91,87 +106,99 @@ export function AppLayout(): JSX.Element {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [mobileOpen]);
 
+  useEffect(() => {
+    const page = location.pathname === '/app'
+      ? 'Dashboard'
+      : location.pathname.startsWith('/app/papers')
+        ? 'Browse Papers'
+        : location.pathname.startsWith('/app/profile')
+          ? 'Profile'
+          : location.pathname.startsWith('/app/notifications')
+            ? 'Notifications'
+            : location.pathname.split('/').filter(Boolean).at(-1)?.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) ?? 'Dashboard';
+    document.title = `${page} | Njala Past Papers`;
+  }, [location.pathname]);
+
+  function onMenuClick(): void {
+    if (isDesktopViewport()) {
+      setDesktopNavOpen((isOpen) => !isOpen);
+      return;
+    }
+    setMobileOpen((isOpen) => !isOpen);
+  }
+
+  function closeNavigation(): void {
+    setMobileOpen(false);
+    if (!isDesktopViewport()) setDesktopNavOpen(false);
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50">
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-brand-700 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
-      >
-        Skip to main content
-      </a>
-
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <button
-              ref={toggleButtonRef}
-              type="button"
-              className="rounded-md p-2 text-slate-500 hover:bg-slate-100 lg:hidden"
-              onClick={() => setMobileOpen((v) => !v)}
-              aria-label="Toggle navigation"
-              aria-expanded={mobileOpen}
-              aria-controls={MOBILE_NAV_ID}
-            >
-              {mobileOpen ? <X className="h-5 w-5" aria-hidden="true" /> : <Menu className="h-5 w-5" aria-hidden="true" />}
-            </button>
-            <span className="text-sm font-bold text-brand-700">Njala Past Papers</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="hidden text-sm text-slate-600 sm:inline">{user?.fullName}</span>
-            <button type="button" className="btn-secondary" onClick={() => void logout()}>
-              <LogOut className="h-4 w-4" aria-hidden="true" />
-              Sign out
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Backdrop: only present while the mobile drawer is open, so it
-          never intercepts clicks on desktop where the nav is static. */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-10 bg-slate-900/30 lg:hidden"
-          aria-hidden="true"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
-      <div className="mx-auto flex max-w-7xl">
-        <nav
-          id={MOBILE_NAV_ID}
-          ref={navRef}
-          aria-label="Primary"
-          className={clsx(
-            'w-64 shrink-0 border-r border-slate-200 bg-white p-4',
-            mobileOpen ? 'fixed inset-y-0 left-0 top-14 z-10 block h-[calc(100vh-3.5rem)] overflow-y-auto shadow-lg' : 'hidden lg:block',
-          )}
+    <NotificationsProvider>
+      <div className="min-h-screen bg-slate-50">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-brand-700 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
         >
-          <ul className="space-y-1">
-            {items.map((item) => (
-              <li key={item.to}>
-                <NavLink
-                  to={item.to}
-                  end={item.to === '/app'}
-                  className={({ isActive }) =>
-                    clsx(
-                      'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium',
-                      isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-700 hover:bg-slate-100',
-                    )
-                  }
-                  onClick={() => setMobileOpen(false)}
-                >
-                  <item.icon className="h-4 w-4" aria-hidden="true" />
-                  {item.label}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
-        </nav>
+          Skip to main content
+        </a>
 
-        <main className="min-w-0 flex-1 p-4 sm:p-6" id="main-content">
-          <Outlet />
-        </main>
+        <AppHeader
+          fullName={user?.fullName ?? ''}
+          roles={user?.roles ?? []}
+          menuExpanded={navOpen}
+          menuButtonRef={toggleButtonRef}
+          onMenuClick={onMenuClick}
+        />
+
+        {mobileOpen && (
+          <div
+            className="fixed inset-x-0 bottom-0 top-28 z-20 bg-slate-950/35 lg:hidden"
+            aria-hidden="true"
+            onClick={closeNavigation}
+          />
+        )}
+
+        <div className="mx-auto flex max-w-7xl">
+          {navOpen && (
+            <nav
+              id={MOBILE_NAV_ID}
+              ref={navRef}
+              aria-label="Primary"
+              className={clsx(
+                'w-64 shrink-0 border-r border-slate-200 bg-white p-4',
+                mobileOpen
+                  ? 'fixed inset-x-0 bottom-0 top-28 z-30 block h-[calc(100dvh-7rem)] overflow-y-auto shadow-xl sm:inset-x-auto sm:w-72'
+                  : 'hidden lg:block',
+              )}
+            >
+              <ul className="space-y-1">
+                {items.map((item) => (
+                  <li key={item.to}>
+                    <NavLink
+                      to={item.to}
+                      end={item.to === '/app'}
+                      className={({ isActive }) =>
+                        clsx(
+                          'flex min-h-11 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium focus-visible:ring-2 focus-visible:ring-brand-600',
+                          isActive ? 'bg-brand-50 text-brand-800' : 'text-slate-700 hover:bg-slate-100',
+                        )
+                      }
+                      onClick={() => setMobileOpen(false)}
+                    >
+                      <item.icon className="h-4 w-4" aria-hidden="true" />
+                      {item.label}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )}
+
+          <main className="min-w-0 flex-1 p-4 sm:p-6" id="main-content">
+            <Outlet />
+          </main>
+        </div>
       </div>
-    </div>
+    </NotificationsProvider>
   );
 }

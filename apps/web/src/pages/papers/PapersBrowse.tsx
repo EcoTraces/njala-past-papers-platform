@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
@@ -41,6 +41,10 @@ const FILTER_KEYS = ['courseId', 'examinationType', 'academicYearId', 'semesterI
 export function PapersBrowse(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
+
+  useEffect(() => {
+    setQ(params.get('q') ?? '');
+  }, [params]);
 
   const page = Number(params.get('page') ?? '1');
   const sort = params.get('sort') ?? 'recent';

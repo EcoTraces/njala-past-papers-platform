@@ -46,4 +46,7 @@
   .skeleton {
     animation: none;
   }
+  html {
+    scroll-behavior: auto;
+  }
 }

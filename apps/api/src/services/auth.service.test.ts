@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForbiddenError, UnauthorizedError } from '../lib/errors.js';
+import { supabaseAdmin } from '../lib/supabase.js';
+import { emailProvider } from '../lib/email.js';
 
 /**
  * These tests mock the Supabase boundary (../lib/supabase.js) rather
@@ -34,6 +36,7 @@ interface FakeQueryResult {
 interface FakeQueryBuilder {
   select: () => FakeQueryBuilder;
   eq: (col: string, value: unknown) => FakeQueryBuilder;
+  ilike: (col: string, value: string) => FakeQueryBuilder;
   maybeSingle: () => Promise<FakeQueryResult>;
   single: () => Promise<FakeQueryResult>;
   insert: (row: Record<string, unknown>) => { error: null };
@@ -41,18 +44,26 @@ interface FakeQueryBuilder {
 }
 
 function makeQueryBuilder(table: string): FakeQueryBuilder {
-  const filters: Array<[string, unknown]> = [];
+  const filters: Array<[string, unknown, 'eq' | 'ilike']> = [];
 
   const maybeSingle = async (): Promise<FakeQueryResult> => {
     if (table !== 'profiles') return { data: null, error: null };
-    const row = profileTable.find((r) => filters.every(([col, value]) => (r as unknown as Record<string, unknown>)[col] === value));
+    const row = profileTable.find((r) => filters.every(([col, value, operator]) => {
+      const actual = (r as unknown as Record<string, unknown>)[col];
+      if (operator === 'ilike') return String(actual ?? '').toLowerCase() === String(value).replace(/\\([\\%_])/g, '$1').toLowerCase();
+      return actual === value;
+    }));
     return { data: row ?? null, error: null };
   };
 
   const builder: FakeQueryBuilder = {
     select: () => builder,
     eq: (col, value) => {
-      filters.push([col, value]);
+      filters.push([col, value, 'eq']);
+      return builder;
+    },
+    ilike: (col, value) => {
+      filters.push([col, value, 'ilike']);
       return builder;
     },
     maybeSingle,
@@ -101,7 +112,12 @@ vi.mock('../lib/supabase.js', () => ({
       admin: {
         createUser: vi.fn(async () => ({ data: { user: { id: 'new-user-id' } }, error: null })),
         deleteUser: vi.fn(async () => ({ error: null })),
+        generateLink: vi.fn(async () => ({
+          data: { properties: { action_link: 'https://reset.example/link' } },
+          error: null,
+        })),
       },
+      resetPasswordForEmail: vi.fn(async () => ({ data: {}, error: null })),
       signInWithPassword: vi.fn(async ({ email, password }: { email: string; password: string }) => {
         if (password === 'wrong-password') {
           return { data: { session: null, user: null }, error: { message: 'Invalid login credentials' } };
@@ -122,7 +138,7 @@ vi.mock('../lib/supabase.js', () => ({
 vi.mock('../lib/email.js', () => ({ emailProvider: { send: vi.fn() } }));
 vi.mock('./audit.service.js', () => ({ recordAuditEvent: vi.fn() }));
 
-const { signupStudent, loginStudent, loginStaff } = await import('./auth.service.js');
+const { signupStudent, loginStudent, loginStaff, requestPasswordResetByEmail, assertPasswordChangeAllowed } = await import('./auth.service.js');
 
 describe('signupStudent (account activation)', () => {
   beforeEach(() => {
@@ -214,5 +230,98 @@ describe('loginStaff (account lockout, Loop 11)', () => {
     await loginStaff('lecturer@example.com', 'correct-password');
     expect(profileTable[0]?.failed_login_attempts).toBe(0);
     expect(profileTable[0]?.locked_until).toBeNull();
+  });
+});
+
+describe('password reset and change eligibility', () => {
+  beforeEach(() => {
+    profileTable = [];
+    vi.mocked(supabaseAdmin.auth.admin.generateLink).mockClear();
+    vi.mocked(supabaseAdmin.auth.resetPasswordForEmail).mockClear();
+    vi.mocked(emailProvider.send).mockClear();
+  });
+
+  it('sends student recovery to the contact email and ignores the request for pending accounts', async () => {
+    profileTable = [{
+      id: 'pending-student',
+      student_id: 'NJ2024PENDING',
+      staff_id: null,
+      contact_email: 'student@example.com',
+      full_name: 'Pending Student',
+      status: 'PENDING',
+      failed_login_attempts: 0,
+      locked_until: null,
+      deleted_at: null,
+    }];
+
+    await requestPasswordResetByEmail('student@example.com');
+    await expect(assertPasswordChangeAllowed('pending-student')).rejects.toBeInstanceOf(ForbiddenError);
+    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(supabaseAdmin.auth.admin.generateLink).not.toHaveBeenCalled();
+  });
+
+  it('does not send recovery for an account that is locked', async () => {
+    profileTable = [{
+      id: 'locked-student',
+      student_id: 'NJ2024LOCKED',
+      staff_id: null,
+      contact_email: 'locked@example.com',
+      full_name: 'Locked Student',
+      status: 'ACTIVE',
+      failed_login_attempts: 5,
+      locked_until: new Date(Date.now() + 60_000).toISOString(),
+      deleted_at: null,
+    }];
+
+    await requestPasswordResetByEmail('locked@example.com');
+    await expect(assertPasswordChangeAllowed('locked-student')).rejects.toThrow(/temporarily locked/i);
+    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(supabaseAdmin.auth.admin.generateLink).not.toHaveBeenCalled();
+  });
+
+  it('sends active student recovery to reset-password and allows active unlocked changes', async () => {
+    profileTable = [{
+      id: 'active-student',
+      student_id: 'NJ2024ACTIVE',
+      staff_id: null,
+      contact_email: 'student@example.com',
+      full_name: 'Active Student',
+      status: 'ACTIVE',
+      failed_login_attempts: 0,
+      locked_until: null,
+      deleted_at: null,
+    }];
+    await requestPasswordResetByEmail('STUDENT@example.com');
+    await assertPasswordChangeAllowed('active-student');
+
+    expect(supabaseAdmin.auth.admin.generateLink).toHaveBeenCalledWith({
+      type: 'recovery',
+      email: 'nj2024active@students.njala.auth.internal',
+      options: { redirectTo: 'http://localhost:5173/reset-password' },
+    });
+    expect(emailProvider.send).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'student@example.com',
+      body: expect.stringContaining('https://reset.example/link'),
+    }));
+  });
+
+  it('uses Supabase recovery for an active staff account', async () => {
+    profileTable = [{
+      id: 'active-staff',
+      student_id: null,
+      staff_id: 'STF001',
+      contact_email: 'staff@example.com',
+      full_name: 'Active Staff',
+      status: 'ACTIVE',
+      failed_login_attempts: 0,
+      locked_until: null,
+      deleted_at: null,
+    }];
+
+    await requestPasswordResetByEmail('staff@example.com');
+
+    expect(supabaseAdmin.auth.resetPasswordForEmail).toHaveBeenCalledWith('staff@example.com', {
+      redirectTo: 'http://localhost:5173/reset-password',
+    });
   });
 });

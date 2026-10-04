@@ -1,6 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { studentLoginSchema, staffLoginSchema, studentSignupSchema, passwordResetRequestSchema } from '@njala/shared';
-import { loginStaff, loginStudent, requestStudentPasswordReset, signupStudent } from '../services/auth.service.js';
+import {
+  assertPasswordChangeAllowed,
+  loginStaff,
+  loginStudent,
+  requestPasswordResetByEmail,
+  requestStudentPasswordReset,
+  signupStudent,
+} from '../services/auth.service.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 
@@ -58,17 +65,23 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     '/password-reset/request',
     {
       config: { rateLimit: PASSWORD_RESET_RATE_LIMIT },
-      schema: { tags: ['auth'], summary: 'Request a password reset link (student, via contact email on file)' },
+      schema: { tags: ['auth'], summary: 'Request a password reset link by account email' },
     },
     async (request, reply) => {
       const input = passwordResetRequestSchema.parse(request.body);
-      if (input.studentId) {
-        await requestStudentPasswordReset(input.studentId);
-      }
-      // Staff use supabase.auth.resetPasswordForEmail() directly from
-      // the client - their Auth identifier IS their real email.
+      if (input.email) await requestPasswordResetByEmail(input.email, request);
+      else if (input.studentId) await requestStudentPasswordReset(input.studentId, request);
       reply.status(202);
-      return { message: 'If an account matching that information exists, reset instructions have been sent.' };
+      return { message: 'If an account exists for this email, a reset link has been sent' };
+    },
+  );
+
+  app.get(
+    '/password/change/eligibility',
+    { preHandler: authenticate, schema: { tags: ['auth'], summary: 'Check whether the current account may change its password' } },
+    async (request) => {
+      await assertPasswordChangeAllowed(request.user!.id);
+      return { eligible: true };
     },
   );
 }

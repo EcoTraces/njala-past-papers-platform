@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Loop 13 (UI/UX quality pass): the brief calls out five specific
- * breakpoints to test at - 360, 390, 768, 1024, 1440px. Rather than a
+ * Loop 13 (UI/UX quality pass): this covers the requested 360, 390, 768,
+ * and 1280px widths while retaining the existing 1024px and 1440px checks. Rather than a
  * one-off manual check, this sweeps every public page (the only ones
  * renderable without a live backend - see public-navigation.spec.ts)
- * at all five and asserts the one invariant that matters at every
+ * at all requested widths and asserts the one invariant that matters at every
  * single width: no horizontal overflow. This is a real regression
  * class in this codebase (see responsive-layout.spec.ts's Loop 05
  * history) and previously only the landing page had any breakpoint
@@ -17,10 +17,11 @@ const BREAKPOINTS = [
   { width: 390, height: 844, label: '390px (iPhone)' },
   { width: 768, height: 1024, label: '768px (tablet)' },
   { width: 1024, height: 768, label: '1024px (small laptop)' },
-  { width: 1440, height: 900, label: '1440px (desktop)' },
+  { width: 1280, height: 800, label: '1280px (desktop)' },
+  { width: 1440, height: 900, label: '1440px (large desktop)' },
 ];
 
-const PAGES = ['/', '/about', '/help', '/contact', '/login', '/signup', '/this-route-does-not-exist'];
+const PAGES = ['/', '/about', '/help', '/contact', '/login', '/signup', '/forgot-password', '/reset-password', '/this-route-does-not-exist'];
 
 for (const bp of BREAKPOINTS) {
   test.describe(`at ${bp.label}`, () => {

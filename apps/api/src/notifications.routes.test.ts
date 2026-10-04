@@ -16,6 +16,7 @@ type Row = Record<string, unknown>;
 function makeFakeDb(rows: Row[]) {
   function builder(mode: 'select' | 'update', patch?: Record<string, unknown>) {
     const filters: Array<(r: Row) => boolean> = [];
+    let countOnly = false;
     const b: Record<string, unknown> = {
       eq(col: string, val: unknown) {
         filters.push((r) => r[col] === val);
@@ -27,7 +28,8 @@ function makeFakeDb(rows: Row[]) {
       limit() {
         return b;
       },
-      select() {
+      select(_columns?: string, options?: { head?: boolean }) {
+        countOnly = options?.head ?? countOnly;
         return b;
       },
       async single() {
@@ -39,7 +41,7 @@ function makeFakeDb(rows: Row[]) {
       then(onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) {
         const matched = rows.filter((r) => filters.every((f) => f(r)));
         if (mode === 'update' && patch) matched.forEach((r) => Object.assign(r, patch));
-        return Promise.resolve({ data: matched, error: null }).then(onFulfilled, onRejected);
+        return Promise.resolve({ data: countOnly ? null : matched, count: countOnly ? matched.length : null, error: null }).then(onFulfilled, onRejected);
       },
     };
     return b;
@@ -50,7 +52,11 @@ function makeFakeDb(rows: Row[]) {
     from(table: string) {
       if (table !== 'notifications') throw new Error(`notifications.routes.test.ts fake only supports notifications, got ${table}`);
       return {
-        select: () => builder('select'),
+        select: (_columns?: string, options?: { head?: boolean }) => {
+          const query = builder('select');
+          (query.select as (columns?: string, selectOptions?: { head?: boolean }) => unknown)('*', options);
+          return query;
+        },
         update: (patch: Record<string, unknown>) => builder('update', patch),
       };
     },
@@ -93,9 +99,10 @@ describe('notifications.routes.ts (Loop 12 QA pass)', () => {
   it('GET / only ever returns the caller\'s own notifications', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/notifications', headers: { authorization: 'Bearer x' } });
     expect(res.statusCode).toBe(200);
-    const items = res.json().items as Row[];
+    const { items, unreadCount } = res.json() as { items: Row[]; unreadCount: number };
     expect(items).toHaveLength(1);
     expect(items[0]!.id).toBe('n1');
+    expect(unreadCount).toBe(1);
   });
 
   it('PATCH /:id/read on the caller\'s own notification marks it read', async () => {
