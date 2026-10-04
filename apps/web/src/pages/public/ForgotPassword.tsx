@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/apiClient';
+import { NjalaLogoLink } from '../../components/NjalaLogoLink';
 
 const COOLDOWN_SECONDS = 60;
 const SUCCESS_MESSAGE = 'If an account exists for this email, a reset link has been sent';
@@ -38,7 +39,7 @@ export function ForgotPassword(): JSX.Element {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
-          <Link to="/" className="text-lg font-bold text-brand-700">Njala Past Papers</Link>
+          <NjalaLogoLink className="justify-center" />
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Forgot password?</h1>
           <p className="mt-1 text-sm text-slate-500">Enter the email address associated with your account.</p>
         </div>

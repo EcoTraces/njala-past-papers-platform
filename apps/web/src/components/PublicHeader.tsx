@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X } from 'lucide-react';
+import { NjalaLogoLink } from './NjalaLogoLink';
 
 const NAV_LINKS = [
   { to: '/about', label: 'About' },
@@ -52,7 +53,7 @@ export function PublicHeader(): JSX.Element {
   return (
     <header className="relative border-b border-slate-200 bg-white">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-4">
-        <Link to="/" className="shrink-0 text-lg font-bold text-brand-700">Njala Past Papers</Link>
+        <NjalaLogoLink className="shrink-0" />
 
         <div className="flex min-w-0 items-center gap-2 sm:gap-4">
           <nav aria-label="Secondary" className="hidden items-center gap-4 text-sm font-medium text-slate-600 sm:flex">

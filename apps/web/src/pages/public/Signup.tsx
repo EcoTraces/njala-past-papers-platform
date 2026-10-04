@@ -8,6 +8,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { api, ApiError } from '../../lib/apiClient';
 import { Spinner } from '../../components/Spinner';
 import { PasswordInput } from '../../components/PasswordInput';
+import { NjalaLogoLink } from '../../components/NjalaLogoLink';
 
 interface ProgrammeOption {
   id: string;
@@ -49,7 +50,7 @@ export function Signup(): JSX.Element {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
-          <Link to="/" className="text-lg font-bold text-brand-700">Njala Past Papers</Link>
+          <NjalaLogoLink className="justify-center" />
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Create your student account</h1>
           <p className="mt-1 text-sm text-slate-500">Only students can self-register. Staff accounts are provisioned by an administrator.</p>
         </div>

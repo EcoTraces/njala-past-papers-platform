@@ -1,7 +1,7 @@
-import { Link } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import type { RefObject } from 'react';
 import type { AppRole } from '@njala/shared';
+import { NjalaLogoLink } from './NjalaLogoLink';
 import { NotificationBell } from './NotificationBell';
 import { SearchBar } from './SearchBar';
 import { UserMenu } from './UserMenu';
@@ -29,10 +29,7 @@ export function AppHeader({ fullName, roles, menuExpanded, menuButtonRef, onMenu
         >
           <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
-        <Link to="/app" aria-label="Njala Past Papers dashboard" className="flex min-w-0 items-center gap-2 rounded-md focus-visible:ring-2 focus-visible:ring-brand-600">
-          <img src="/njala-logo.png" width="32" height="32" alt="Njala University crest" className="h-8 w-8 shrink-0 object-contain" />
-          <span className="hidden truncate text-sm font-bold text-brand-800 min-[390px]:inline sm:text-base">Njala Past Papers</span>
-        </Link>
+        <NjalaLogoLink to="/app" compact className="text-sm text-brand-800 sm:text-base" />
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <span className="sr-only">Signed in as {fullName}</span>
           <NotificationBell />

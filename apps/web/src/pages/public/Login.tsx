@@ -8,6 +8,7 @@ import { studentLoginSchema, staffLoginSchema } from '@njala/shared';
 import { useAuth } from '../../hooks/useAuth';
 import { ApiError } from '../../lib/apiClient';
 import { PasswordInput } from '../../components/PasswordInput';
+import { NjalaLogoLink } from '../../components/NjalaLogoLink';
 
 // Reuses the same schemas the API validates against (packages/shared),
 // so login-time format feedback (and the studentId normalization -
@@ -50,7 +51,7 @@ export function Login(): JSX.Element {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
-          <Link to="/" className="text-lg font-bold text-brand-700">Njala Past Papers</Link>
+          <NjalaLogoLink className="justify-center" />
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Sign in</h1>
         </div>
 

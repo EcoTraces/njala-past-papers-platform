@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PasswordInput } from '../../components/PasswordInput';
 import { api } from '../../lib/apiClient';
 import { supabase } from '../../lib/supabaseClient';
+import { NjalaLogoLink } from '../../components/NjalaLogoLink';
 
 type RecoveryState = 'checking' | 'ready' | 'invalid';
 
@@ -119,7 +120,7 @@ export function ResetPassword(): JSX.Element {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
-          <Link to="/" className="text-lg font-bold text-brand-700">Njala Past Papers</Link>
+          <NjalaLogoLink className="justify-center" />
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Reset your password</h1>
         </div>
         {recoveryState === 'checking' ? (
