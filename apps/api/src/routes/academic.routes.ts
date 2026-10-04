@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { AnyZodObject } from 'zod';
+import { z, type AnyZodObject } from 'zod';
 import {
   facultyInputSchema,
   departmentInputSchema,
@@ -11,7 +11,7 @@ import {
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
 import { recordAuditEvent } from '../services/audit.service.js';
-import { NotFoundError } from '../lib/errors.js';
+import { BadRequestError, NotFoundError } from '../lib/errors.js';
 
 const ADMIN_ONLY = requireRole('ADMIN', 'SUPER_ADMIN');
 
@@ -30,6 +30,7 @@ function registerCrud(
     select?: string;
     orderBy?: string;
     softDelete?: boolean;
+    parents?: Array<{ field: string; table: string; label: string; softDelete?: boolean }>;
   },
 ) {
   const select = opts.select ?? '*';
@@ -53,9 +54,27 @@ function registerCrud(
   });
 
   app.post(opts.path, { preHandler: [authenticate, ADMIN_ONLY], schema: { tags: [opts.tag] } }, async (request, reply) => {
+    for (const parent of opts.parents ?? []) {
+      const body = request.body && typeof request.body === 'object' ? request.body as Record<string, unknown> : {};
+      const id = body[parent.field];
+      if (typeof id !== 'string' || !z.string().uuid().safeParse(id).success) {
+        throw new BadRequestError(`Invalid ${parent.label.toLowerCase()}`);
+      }
+      let parentQuery = request.db.from(parent.table).select('id').eq('id', id);
+      if (parent.softDelete) parentQuery = parentQuery.is('deleted_at', null);
+      const { data, error: parentError } = await parentQuery.maybeSingle();
+      if (parentError) throw parentError;
+      if (!data) throw new BadRequestError(`${parent.label} not found`);
+    }
+
     const input = opts.schema.parse(request.body);
     const { data, error } = await request.db.from(opts.table).insert(toSnakeCase(input)).select().single();
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23503' && opts.parents?.length) {
+        throw new BadRequestError(`Invalid ${opts.parents[0]!.label.toLowerCase()}`);
+      }
+      throw error;
+    }
     await recordAuditEvent({ actorId: request.user!.id, action: `${opts.table}.create`, entityType: opts.table, entityId: data.id, request });
     reply.status(201);
     return data;
@@ -91,9 +110,21 @@ function toSnakeCase(obj: Record<string, unknown>): Record<string, unknown> {
 
 export async function academicRoutes(app: FastifyInstance): Promise<void> {
   registerCrud(app, { path: '/faculties', table: 'faculties', tag: 'academic', schema: facultyInputSchema });
-  registerCrud(app, { path: '/departments', table: 'departments', tag: 'academic', schema: departmentInputSchema });
-  registerCrud(app, { path: '/programmes', table: 'programmes', tag: 'academic', schema: programmeInputSchema });
-  registerCrud(app, { path: '/courses', table: 'courses', tag: 'academic', schema: courseInputSchema, orderBy: 'code' });
+  registerCrud(app, {
+    path: '/departments', table: 'departments', tag: 'academic', schema: departmentInputSchema,
+    parents: [{ field: 'facultyId', table: 'faculties', label: 'Faculty', softDelete: true }],
+  });
+  registerCrud(app, {
+    path: '/programmes', table: 'programmes', tag: 'academic', schema: programmeInputSchema,
+    parents: [{ field: 'departmentId', table: 'departments', label: 'Department', softDelete: true }],
+  });
+  registerCrud(app, {
+    path: '/courses', table: 'courses', tag: 'academic', schema: courseInputSchema, orderBy: 'code',
+    parents: [
+      { field: 'departmentId', table: 'departments', label: 'Department', softDelete: true },
+      { field: 'programmeId', table: 'programmes', label: 'Programme', softDelete: true },
+    ],
+  });
   registerCrud(app, {
     path: '/academic-years',
     table: 'academic_years',
@@ -109,6 +140,7 @@ export async function academicRoutes(app: FastifyInstance): Promise<void> {
     schema: semesterInputSchema,
     orderBy: 'start_date',
     softDelete: false,
+    parents: [{ field: 'academicYearId', table: 'academic_years', label: 'Academic year' }],
   });
 
   // Courses a lecturer is authorized to manage - used to drive "My Courses".
